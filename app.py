@@ -2,6 +2,7 @@ import streamlit as st
 from st_supabase_connection import SupabaseConnection
 import datetime
 import calendar
+import jpholiday # 祝日判定用
 
 # --- 1. ページ基本設定 ---
 st.set_page_config(page_title="かりんとポータル", page_icon="💖", layout="centered")
@@ -19,7 +20,7 @@ if "password_correct" not in st.session_state:
 # --- 3. メイン画面構築 ---
 user = st.session_state["user_info"]
 
-# A. 売上見込みエリア（画像のデザインを反映）
+# A. 売上見込み（画像デザイン反映）
 st.markdown("""
     <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 15px; border-radius: 15px; text-align: center; margin-bottom: 20px;">
         <span style="color: #666; font-size: 0.8em;">今日の売上 (見込み) ✨</span><br>
@@ -27,18 +28,17 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-# B. 【改善版】シフトがわかるカレンダー
+# B. 【詳細カスタマイズ版】カレンダー
 st.subheader("📅 カレンダー")
 
-now = datetime.datetime.now()
+now = datetime.date.today()
 year, month = now.year, now.month
 cal = calendar.monthcalendar(year, month)
 
-# --- 💡 テスト用：シフトが入っている日（実際はDBから取得） ---
-# 例：28日、30日、31日にシフトがあるとする
+# --- テスト用：シフト日 ---
 shift_days = [28, 30, 31]
 
-# HTML/CSSでカレンダーを構築
+# HTML/CSS構築
 cal_html = f"""
 <style>
     .calendar-table {{
@@ -48,86 +48,94 @@ cal_html = f"""
     }}
     .calendar-table th {{
         text-align: center;
-        font-size: 0.8em;
-        color: #FF4B4B;
+        font-size: 0.7em;
         padding: 5px 0;
     }}
     .calendar-table td {{
-        text-align: center;
-        padding: 10px 0;
+        vertical-align: top; /* 左上に配置するために必須 */
+        padding: 5px;
         border: 1px solid #f0f0f0;
-        font-size: 0.9em;
+        height: 45px; /* 枠の高さを固定 */
         background-color: white;
-        position: relative; /* ドットを配置するために必要 */
+        position: relative;
     }}
-    /* シフトがある日の印（ピンクのドット） */
+    .day-num {{
+        font-size: 0.75em;
+        font-weight: bold;
+        display: block;
+        text-align: left;
+    }}
+    /* 土曜:青 / 日祝:赤 / 平日:黒 の色指定 */
+    .sat {{ color: #007AFF; }}
+    .sun-hol {{ color: #FF3B30; }}
+    .weekday {{ color: #333; }}
+
+    /* シフトドット */
     .has-shift::after {{
         content: '●';
         color: #FF4B4B;
         font-size: 8px;
         position: absolute;
-        bottom: 2px;
+        bottom: 5px;
         left: 50%;
         transform: translateX(-50%);
     }}
-    /* 今日のハイライト */
+    /* 今日のハイライト（枠を薄いピンクに） */
     .today-cell {{
-        background-color: #FF4B4B !important;
-        color: white !important;
-        font-weight: bold;
-        border-radius: 5px;
+        background-color: #FFF0F2 !important;
+        border: 2px solid #FF4B4B !important;
     }}
 </style>
 <table class="calendar-table">
     <tr>
-        <th>月</th><th>火</th><th>水</th><th>木</th><th>金</th><th style="color:#007AFF;">土</th><th style="color:red;">日</th>
+        <th class="weekday">月</th><th class="weekday">火</th><th class="weekday">水</th>
+        <th class="weekday">木</th><th class="weekday">金</th><th class="sat">土</th><th class="sun-hol">日</th>
     </tr>
 """
 
 for week in cal:
     cal_html += "<tr>"
-    for day in week:
+    for i, day in enumerate(week):
         if day == 0:
             cal_html += "<td></td>"
         else:
-            classes = []
-            if day == now.day:
-                classes.append("today-cell")
-            if day in shift_days:
-                classes.append("has-shift")
+            current_date = datetime.date(year, month, day)
+            is_holiday = jpholiday.is_holiday(current_date)
             
-            class_str = f'class="{" ".join(classes)}"' if classes else ""
-            cal_html += f'<td {class_str}>{day}</td>'
+            # クラス判定
+            day_class = "weekday"
+            if i == 5: day_class = "sat" # 土曜
+            if i == 6 or is_holiday: day_class = "sun-hol" # 日曜または祝日
+            
+            td_classes = []
+            if day == now.day: td_classes.append("today-cell")
+            if day in shift_days: td_classes.append("has-shift")
+            
+            td_class_str = f'class="{" ".join(td_classes)}"' if td_classes else ""
+            
+            cal_html += f"""
+                <td {td_class_str}>
+                    <span class="day-num {day_class}">{day}</span>
+                </td>
+            """
     cal_html += "</tr>"
 
 cal_html += "</table>"
-
-# カレンダーの表示
 st.markdown(cal_html, unsafe_allow_html=True)
 
-# C. 本日の予定（カレンダーの下）
+# C. 本日の予定
 st.divider()
 st.markdown(f"### 📝 本日の予定")
-
 with st.container(border=True):
-    # シフトがあるかないかで表示を分ける
     if now.day in shift_days:
         st.success("✅ 本日は出勤予定です")
         st.write("**⏰ 19:00 - 24:00**")
         st.write("🏢 池袋西口店")
-        st.caption("📌 予約あり：20:30〜 田中様")
     else:
         st.info("本日の出勤予定はありません")
 
-# D. お知らせエリア
-st.divider()
-st.subheader("📢 お知らせ")
-st.info("重要：ドレスコードが変更になります 👗")
-st.success("ユキちゃん「リピートNo.1」バッジおめでとう！ 🎊")
-
-# --- 4. サイドバーメニュー ---
+# D. サイドバー
 with st.sidebar:
     st.title("Menu")
-    st.button("🏠 ホーム")
-    st.button("📝 実績報告")
-    st.button("📤 シフト申請")
+    st.button("🏠 ホーム", use_container_width=True)
+    st.button("📝 実績報告", use_container_width=True)
