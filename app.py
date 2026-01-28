@@ -7,9 +7,9 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="かりんとグループ | ポータル", page_icon="💖")
 conn = st.connection("supabase", type=SupabaseConnection)
 
-# --- 2. 🛰 統合同期関数（桁数強制修正版） ---
+# --- 2. 🛰 統合同期関数（Upsert & 0埋め対応） ---
 def sync_all_data():
-    """スプレッドシートから店舗一覧と名簿の両方を同期する（0埋め対応）"""
+    """スプレッドシートから店舗一覧と名簿を上書き同期する"""
     try:
         scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
@@ -21,11 +21,10 @@ def sync_all_data():
         shop_data = shop_sheet.get_all_records()
         if shop_data:
             for row in shop_data:
-                # shop_idを必ず3桁の文字列(001など)に矯正
+                # 店舗IDを必ず3桁(001など)に補正
                 row['shop_id'] = str(row['shop_id']).zfill(3)
-            
-            conn.table("shop_master").delete().neq("shop_id", "none").execute()
-            conn.table("shop_master").insert(shop_data).execute()
+            # upsertにより既存データは更新、新規は追加される（削除しないためエラーを防げる）
+            conn.table("shop_master").upsert(shop_data).execute()
 
         # --- B. キャスト名簿の同期 ---
         all_casts = []
@@ -35,28 +34,26 @@ def sync_all_data():
             data = sheet.get_all_records()
             if data:
                 for row in data:
-                    # login_idを必ず8桁(00100001など)に矯正
+                    # IDを必ず8桁、店舗IDを必ず3桁に補正
                     row['login_id'] = str(row['login_id']).zfill(8)
-                    # home_shop_idを必ず3桁(001など)に矯正
                     row['home_shop_id'] = str(row['home_shop_id']).zfill(3)
-                    # パスワードなども念のため文字列に
                     row['password'] = str(row['password'])
                 all_casts.extend(data)
         
         if all_casts:
-            conn.table("cast_members").delete().neq("login_id", "none").execute()
-            conn.table("cast_members").insert(all_casts).execute()
+            # upsertにより既存キャストは更新、新人は追加。紐付けエラーが起きない
+            conn.table("cast_members").upsert(all_casts).execute()
             return len(shop_data), len(all_casts)
         
         return len(shop_data), 0
     except Exception as e:
-        st.error(f"同期エラー: {e}")
+        st.error(f"同期エラーが発生しました: {e}")
         return None, None
 
-# --- 3. 🔐 ログイン認証 ---
+# --- 3. 🔐 ログイン認証ロジック ---
 def check_password():
     def password_entered():
-        # 入力されたIDも8桁に揃えてから検索する（入力ミス対策）
+        # 入力されたIDも念のため8桁に補正して検索
         input_id = str(st.session_state["login_id"]).zfill(8)
         
         user = conn.table("cast_members") \
@@ -73,7 +70,7 @@ def check_password():
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        st.title("🔐 ログイン")
+        st.title("🔐 かりんとグループ ログイン")
         st.text_input("ログインID (8桁)", key="login_id")
         st.text_input("パスワード", type="password", key="password_input")
         st.button("ログイン", on_click=password_entered)
@@ -86,16 +83,16 @@ def check_password():
         return False
     return True
 
-# --- 4. 管理メニュー（サイドバー） ---
+# --- 4. 管理メニュー & サイドバー ---
 with st.sidebar:
     with st.expander("⚙️ 管理設定"):
         admin_key = st.text_input("Admin Key", type="password")
-        if admin_key == "karin10": # ここをご希望のPWに変更済み
+        if admin_key == "karin10":
             if st.button("全データを最新に同期 🔄"):
-                with st.spinner("0埋め処理を適用して同期中..."):
+                with st.spinner("店舗と名簿を安全に更新中..."):
                     s_count, c_count = sync_all_data()
                     if s_count is not None:
-                        st.success(f"同期完了！店舗:{s_count} / キャスト:{c_count}")
+                        st.success(f"同期成功！店舗:{s_count}件 / キャスト:{c_count}名")
 
     if st.session_state.get("password_correct"):
         st.divider()
@@ -109,17 +106,23 @@ if check_password():
     user = st.session_state["user_info"]
     st.title(f"💖 {user['display_name']} さんのマイページ")
     
+    # 店舗プルダウン作成
     shops = conn.table("shop_master").select("*").execute()
     shop_options = {item['shop_id']: item['shop_name'] for item in shops.data}
     shop_ids = sorted(list(shop_options.keys()))
 
-    with st.form("input_form", clear_on_submit=True):
-        default_idx = shop_ids.index(user['home_shop_id']) if user['home_shop_id'] in shop_ids else 0
+    with st.form("earnings_form", clear_on_submit=True):
+        st.subheader("📝 本日の実績報告")
         
-        selected_shop = st.selectbox(
-            "勤務店舗（ヘルプは変更してください）", 
-            options=shop_ids, 
-            format_func=lambda x: f"{x}: {shop_options[x]}", 
+        # 自分の本拠地を初期値にする
+        default_idx = 0
+        if user['home_shop_id'] in shop_ids:
+            default_idx = shop_ids.index(user['home_shop_id'])
+        
+        selected_shop_id = st.selectbox(
+            "勤務店舗（ヘルプは変更してください）",
+            options=shop_ids,
+            format_func=lambda x: f"{x}: {shop_options[x]}",
             index=default_idx
         )
         
@@ -130,17 +133,22 @@ if check_password():
         if st.form_submit_button("実績を保存する ✨"):
             conn.table("daily_earnings").insert({
                 "cast_id": user['login_id'],
-                "shop_id": selected_shop,
+                "shop_id": selected_shop_id,
                 "amount": amount,
                 "date": work_date.isoformat(),
                 "memo": memo
             }).execute()
-            st.success("実績を保存しました！お疲れ様でした。")
+            st.success("保存しました！今日もお疲れ様でした。")
             st.balloons()
 
-    # 自分の履歴表示
+    # 入力履歴
     st.divider()
-    history = conn.table("daily_earnings").select("*").eq("cast_id", user['login_id']).order("date", desc=True).limit(5).execute()
+    history = conn.table("daily_earnings") \
+        .select("*") \
+        .eq("cast_id", user['login_id']) \
+        .order("date", desc=True) \
+        .limit(5).execute()
+    
     if history.data:
-        st.subheader("📊 あなたの最近の履歴")
+        st.subheader("📊 最近の入力履歴")
         st.table(history.data)
