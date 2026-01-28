@@ -7,10 +7,10 @@ from bs4 import BeautifulSoup
 import time
 import re
 
-# --- 1. ページ設定 (最上部で1回のみ) ---
-st.set_page_config(page_title="かりんとポータル ver 4.20", layout="centered")
+# --- 1. [CRITICAL] ページ設定 ---
+st.set_page_config(page_title="かりんとポータル ver 4.50", layout="centered")
 
-# --- 2. 🔐 セッション永続化ガード (絶対にURLを変えない) ---
+# --- 2. 🔐 セッション永続化ガード (URL変更を排除) ---
 if "password_correct" not in st.session_state:
     st.session_state["password_correct"] = False
 if "selected_date" not in st.session_state:
@@ -22,10 +22,10 @@ if "user_info" not in st.session_state:
 try:
     conn = st.connection("supabase", type=SupabaseConnection)
 except:
-    st.error("DB接続エラー。")
+    st.error("DB接続エラー。Secretsの設定を確認してください。")
     st.stop()
 
-# --- 3. 🛰️ 同期ロジック (個別・時間解析・自動削除) ---
+# --- 3. 🛰️ 同期ロジック (時間解析込) ---
 def sync_individual_shift(user_info):
     hp_name = user_info.get('hp_display_name')
     if not hp_name: return "HP名未設定", 0
@@ -59,7 +59,7 @@ def sync_individual_shift(user_info):
 
 # --- 4. 🔑 ログイン画面 ---
 if not st.session_state["password_correct"]:
-    st.title("🔐 ログイン (ver 4.20)")
+    st.title("🔐 ログイン (ver 4.50)")
     input_id = st.text_input("ログインID (8桁)")
     input_pw = st.text_input("パスワード", type="password")
     if st.button("ログイン"):
@@ -75,19 +75,51 @@ if not st.session_state["password_correct"]:
 
 user = st.session_state["user_info"]
 
-# --- 5. メインUI ---
-st.title(f"かりんとポータル ver 4.20")
+# --- 5. 🎨 [PRO HACK] 絶対に崩れない・スクロールしないCSS ---
+st.markdown("""
+<style>
+    /* 1. カラムの余白を抹殺し、スマホでも強制的に横に7個並べる [cite: 2026-01-28] */
+    [data-testid="stHorizontalBlock"] {
+        gap: 0px !important;
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        overflow: hidden !important; /* 横スクロールを物理的に禁止 */
+    }
+    
+    /* 2. 各列の幅を正確に1/7に固定 [cite: 2026-01-28] */
+    [data-testid="column"] {
+        flex: 1 1 0% !important;
+        min-width: 0 !important;
+        width: 14.28% !important;
+        padding: 1px !important;
+    }
 
+    /* 3. ボタンをスマホサイズに極限まで最適化 [cite: 2026-01-28] */
+    div.stButton > button {
+        border: 1px solid #eee !important;
+        background-color: white !important;
+        height: 42px !important; /* 高さを抑えて視認性向上 */
+        width: 100% !important;
+        padding: 0 !important;
+        font-size: 11px !important; /* 画面を突き抜けない最小サイズ */
+        border-radius: 4px !important;
+        line-height: 1 !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# --- 6. メインUI ---
 # キラキラヘッダー
 sel_d = st.session_state["selected_date"]
 st.markdown(f"""
     <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 15px; border-radius: 15px; text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 20px;">
-        <span style="color: #666; font-size: 0.8em; font-weight: bold;">{sel_d.month}/{sel_d.day} の売上見込み ✨</span><br>
+        <span style="color: #666; font-size: 0.8em; font-weight: bold;">{sel_d.month}/{sel_d.day} の売上 ✨</span><br>
         <span style="font-size: 1.5em; font-weight: bold; color: #333;">¥ 28,500</span>
     </div>
     """, unsafe_allow_html=True)
 
-# ヘッダーと同期
+# カレンダー見出しと同期
 col_t, col_s = st.columns([6, 4])
 with col_t: st.subheader("📅 スケジュール")
 with col_s:
@@ -95,41 +127,7 @@ with col_s:
         sync_individual_shift(user)
         st.rerun()
 
-# --- 6. 🗓️ カレンダー描画 (横スクロール絶対禁止CSS) ---
-st.markdown("""
-<style>
-    /* 1. カラムの余白（Gap）を完全にゼロにする [cite: 2026-01-28] */
-    [data-testid="stHorizontalBlock"] {
-        gap: 0px !important;
-        display: flex !important;
-        flex-direction: row !important;
-        flex-wrap: nowrap !important;
-    }
-    /* 2. 各カラムを画面幅の1/7に強制固定し、余白を排除 [cite: 2026-01-28] */
-    [data-testid="column"] {
-        width: 14.28% !important;
-        min-width: 0 !important;
-        flex: 1 1 0% !important;
-        padding: 1px !important;
-    }
-    /* 3. ボタンを正方形に近い形にし、文字サイズを自動調整 [cite: 2026-01-28] */
-    div.stButton > button {
-        border: 1px solid #eee !important;
-        background-color: white !important;
-        height: 40px !important;
-        width: 100% !important;
-        padding: 0 !important;
-        font-size: 12px !important;
-        line-height: 1 !important;
-    }
-    /* 選択された日付の強調 */
-    .selected-date button {
-        background-color: #FFF0F0 !important;
-        border: 2px solid #FF4B4B !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-
+# --- 7. 🗓️ カレンダー描画 ---
 try:
     shift_res = conn.table("shifts").select("date, shift_time").eq("cast_id", user['login_id']).execute()
     shift_map = {s['date']: s['shift_time'] for s in shift_res.data}
@@ -139,13 +137,13 @@ now = datetime.date.today()
 cal = calendar.monthcalendar(now.year, now.month)
 week_days = ["月", "火", "水", "木", "金", "土", "日"]
 
-# 曜日（超コンパクト）
+# 曜日（超省スペース）
 w_cols = st.columns(7)
 for i, wd in enumerate(week_days):
     color = "#007AFF" if i==5 else "#FF3B30" if i==6 else "#888"
     w_cols[i].markdown(f"<div style='text-align:center; font-size:10px; color:{color};'>{wd}</div>", unsafe_allow_html=True)
 
-# 日付グリッド (st.buttonを使用)
+# 日付グリッド
 for week in cal:
     d_cols = st.columns(7)
     for i, day in enumerate(week):
@@ -153,17 +151,16 @@ for week in cal:
             cell_date = datetime.date(now.year, now.month, day)
             date_iso = cell_date.isoformat()
             
-            # シフトありは「●」を表示
-            label = str(day)
-            if date_iso in shift_map:
-                label += "●"
+            # 出勤・曜日による装飾
+            btn_label = str(day)
+            if date_iso in shift_map: btn_label += "●"
             
-            # 【重要】URLを変えず、session_stateだけを書き換えるのでログアウトしない [cite: 2026-01-28]
-            if d_cols[i].button(label, key=f"d_{date_iso}", use_container_width=True):
+            # 【絶対ログアウトしない】内部セッション書き換え方式 [cite: 2026-01-28]
+            if d_cols[i].button(btn_label, key=f"d_{date_iso}", use_container_width=True):
                 st.session_state["selected_date"] = cell_date
                 st.rerun()
 
-# --- 7. 🕒 詳細表示 ---
+# --- 8. 🕒 詳細表示 ---
 selected_date = st.session_state["selected_date"]
 st.markdown(f"#### {selected_date.month}/{selected_date.day} の予定")
 
@@ -172,7 +169,7 @@ with st.container(border=True):
     if date_key in shift_map:
         st.info(f"🕒 シフト：{shift_map[date_key]}")
     else:
-        st.write("予定なし")
+        st.write("予定はありません。")
 
 with st.sidebar:
     st.write(f"👤 {user['hp_display_name']} さん")
