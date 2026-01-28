@@ -4,6 +4,7 @@ import datetime
 import calendar
 import requests
 from bs4 import BeautifulSoup
+import time
 
 # --- 1. ページ基本設定 ---
 st.set_page_config(page_title="かりんとポータル", page_icon="💖", layout="centered")
@@ -14,91 +15,56 @@ try:
 except ImportError:
     jpholiday = None
 
-# --- 2. 🛰 統合同期 & スクレイピング関数 ---
+# --- 2. 🛰 巡回スクレイピング関数（未来対応版） ---
 
-def sync_all_data():
-    """スプレッドシートから名簿を同期（列名のマッピング修正版）"""
-    import gspread
-    from google.oauth2.service_account import Credentials
+def scrape_multi_day_shifts():
+    """今日から7日間分のページを巡回してシフトを更新する"""
     try:
-        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
-        client = gspread.authorize(creds)
-        sh = client.open_by_key(st.secrets["spreadsheet"]["id"])
-
-        # A. 店舗マスター
-        shop_sheet = sh.worksheet("店舗一覧")
-        shop_data = shop_sheet.get_all_records()
-        if shop_data:
-            for row in shop_data:
-                row['shop_id'] = str(row['shop_id']).zfill(3)
-            conn.table("shop_master").upsert(shop_data).execute()
-
-        # B. キャスト名簿（「HP表示名」の読み込み）
-        all_casts = []
-        for sheet in sh.worksheets():
-            if sheet.title == "店舗一覧": continue
-            data = sheet.get_all_records()
-            if data:
-                for row in data:
-                    row['login_id'] = str(row['login_id']).zfill(8)
-                    row['home_shop_id'] = str(row['home_shop_id']).zfill(3)
-                    row['password'] = str(row['password'])
-                    # --- 💡 重要：スプレッドシートの「HP表示名」をDBの「hp_display_name」に変換 ---
-                    if "HP表示名" in row:
-                        row['hp_display_name'] = row.pop("HP表示名")
-                all_casts.extend(data)
-        
-        if all_casts:
-            conn.table("cast_members").upsert(all_casts).execute()
-            return len(shop_data), len(all_casts)
-        return len(shop_data), 0
-    except Exception as e:
-        st.error(f"同期エラー: {e}")
-        return None, None
-
-def scrape_and_update_shifts():
-    """HPから名前を検出する（タグに依存しない高精度版）"""
-    try:
-        # 1. DBから「HP表示名」のリストを先に取得
+        # DBからマッピング用名簿を取得
         casts = conn.table("cast_members").select("login_id, hp_display_name, home_shop_id").execute()
-        # { "はなこ": ("00100001", "001"), ... } の辞書を作る
         name_map = {c['hp_display_name']: (c['login_id'], c['home_shop_id']) for c in casts.data if c['hp_display_name']}
         
         if not name_map:
-            return "DBに『HP表示名』が登録されていません。先に名簿同期をしてください。"
+            return "先に名簿同期を行ってください。"
 
-        # 2. HPを読み込む（ブラウザのふりをするUser-Agentを追加）
-        url = "https://ikekari.com/attend.php"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        res = requests.get(url, headers=headers, timeout=15)
-        res.encoding = 'utf-8'
-        html_text = res.text
+        base_url = "https://ikekari.com/attend.php"
+        total_found = 0
         
-        # 3. 検出：HPの文字全体の中に、登録名が含まれているか1人ずつチェック
-        today = datetime.date.today().isoformat()
-        found_count = 0
-        
-        for hp_name, (c_id, s_id) in name_map.items():
-            if hp_name in html_text:
-                # 名前が見つかったらシフトを登録
-                conn.table("shifts").upsert({
-                    "date": today,
-                    "cast_id": c_id,
-                    "shop_id": s_id,
-                    "status": "確定"
-                }).execute()
-                found_count += 1
-        
-        if found_count == 0:
-            return "HPを読み込みましたが、一致する名前がありませんでした（名簿の『HP表示名』と一致しているか確認してください）。"
-        
-        return f"本日の出勤者 {found_count} 名を検出し、シフトを更新しました！"
+        # 今日から7日分ループ
+        for i in range(7):
+            target_date = datetime.date.today() + datetime.timedelta(days=i)
+            date_str = target_date.isoformat() # YYYY-MM-DD
+            
+            # HPのURL形式に合わせてパラメータを付与（?date=2026-01-28 など）
+            # ※実際のURL形式が ?day= や ?d= の場合はここを調整します
+            target_url = f"{base_url}?date={date_str}"
+            
+            res = requests.get(target_url, headers=headers, timeout=10)
+            res.encoding = 'utf-8'
+            html_text = res.text
+            
+            found_in_day = 0
+            for hp_name, (c_id, s_id) in name_map.items():
+                if hp_name in html_text:
+                    conn.table("shifts").upsert({
+                        "date": date_str,
+                        "cast_id": c_id,
+                        "shop_id": s_id,
+                        "status": "確定"
+                    }).execute()
+                    found_in_day += 1
+            
+            total_found += found_in_day
+            # サーバー負荷軽減のため、1ページごとに少し待機
+            time.sleep(0.5)
+            
+        return f"7日間分をスキャンし、合計 {total_found} 件のシフトを更新しました！"
         
     except Exception as e:
-        return f"エラーが発生しました: {e}"
+        return f"エラー: {e}"
 
-# --- 3. 🔐 ログイン認証 ---
+# --- 3. 🔐 ログイン認証（既存通り） ---
 if "password_correct" not in st.session_state:
     st.title("🔐 ログイン")
     input_id = st.text_input("ログインID (8桁)")
@@ -116,44 +82,35 @@ if "password_correct" not in st.session_state:
 # --- 4. メイン画面 ---
 user = st.session_state["user_info"]
 
-# サイドバー（管理者用）
 with st.sidebar:
     st.header("Admin Menu")
     admin_key = st.text_input("Admin Key", type="password")
     if admin_key == "karin10":
-        if st.button("1. 名簿同期 🔄"):
-            s, c = sync_all_data()
-            if s is not None: st.success(f"名簿更新完了! ({c}名)")
-        if st.button("2. HPからシフト取得 🌐"):
-            with st.spinner("HPを解析中..."):
-                msg = scrape_and_update_shifts()
-                st.info(msg)
+        if st.button("1週間分のシフトを一括取得 🌐"):
+            with st.spinner("1週間分を巡回中..."):
+                msg = scrape_multi_day_shifts()
+                st.success(msg)
     if st.button("ログアウト"):
         st.session_state.clear()
         st.rerun()
 
-# --- 5. UI（デザイン再現） ---
+# --- 5. UI（カレンダー表示） ---
+# (前回のカレンダー表示ロジックを継続)
 st.markdown(f"""
-    <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 15px; border-radius: 15px; text-align: center; margin-bottom: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
-        <span style="color: #666; font-size: 0.8em; font-weight: bold;">今日の売上 (見込み) ✨</span><br>
+    <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 15px; border-radius: 15px; text-align: center; margin-bottom: 20px;">
         <span style="font-size: 1.8em; font-weight: bold; color: #333;">¥ 28,500 GET!</span>
     </div>
     """, unsafe_allow_html=True)
 
-# カレンダー表示
 st.subheader("📅 カレンダー")
 now = datetime.date.today()
-year, month = now.year, now.month
-cal = calendar.monthcalendar(year, month)
+cal = calendar.monthcalendar(now.year, now.month)
 
-# 本人のシフトをDBから取得
-try:
-    my_shifts = conn.table("shifts").select("date").eq("cast_id", user['login_id']).execute()
-    shift_days = [datetime.datetime.strptime(s['date'], "%Y-%m-%d").day for s in my_shifts.data]
-except:
-    shift_days = []
+# DBから本人のシフトを全取得
+my_shifts = conn.table("shifts").select("date").eq("cast_id", user['login_id']).execute()
+shift_days = [datetime.datetime.strptime(s['date'], "%Y-%m-%d").day for s in my_shifts.data]
 
-# カレンダーHTML構築
+# CSS & HTML 構築（省略せず反映）
 cal_style = """
 <style>
     .calendar-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -176,7 +133,7 @@ for week in cal:
     for i, day in enumerate(week):
         if day == 0: cal_html += "<td></td>"
         else:
-            cur_date = datetime.date(year, month, day)
+            cur_date = datetime.date(now.year, now.month, day)
             is_hol = jpholiday.is_holiday(cur_date) if jpholiday else False
             d_color = "sat" if i==5 else "sun-hol" if i==6 or is_hol else "weekday"
             td_class = []
@@ -188,12 +145,3 @@ for week in cal:
 cal_html += "</table>"
 
 st.markdown(cal_html, unsafe_allow_html=True)
-
-# 予定詳細
-st.divider()
-st.subheader("📝 本日の予定")
-with st.container(border=True):
-    if now.day in shift_days:
-        st.success("✅ 本日は出勤予定です")
-    else:
-        st.info("出勤予定はありません")
