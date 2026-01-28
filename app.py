@@ -8,8 +8,8 @@ import time
 import re
 
 # --- 1. ページ基本設定 & バージョン管理 ---
-st.set_page_config(page_title="キャストマイページ ver 1.1", page_icon="💖", layout="centered")
-st.title("💖 キャストマイページ ver 1.1")
+st.set_page_config(page_title="キャストマイページ ver 1.11", page_icon="💖", layout="centered")
+st.markdown("<h5 style='text-align:center; color:#FF4B4B;'>💖 キャストマイページ ver 1.11</h5>", unsafe_allow_html=True)
 conn = st.connection("supabase", type=SupabaseConnection)
 
 try:
@@ -17,60 +17,57 @@ try:
 except ImportError:
     jpholiday = None
 
-# --- ✨ インタラクティブ・フレームCSS ---
+# --- ✨ 【重要】枠崩れを絶対に許さない最強CSS ---
 st.markdown("""
     <style>
-    /* 7列をスマホでも強制維持 */
-    div[data-testid="stHorizontalBlock"] {
+    /* 1. 7列の横並びを強制（スマホでの縦積みを禁止） */
+    [data-testid="stHorizontalBlock"] {
         display: flex !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
-        gap: 4px !important;
-        margin-bottom: 4px !important;
+        gap: 2px !important; /* 枠同士の隙間を最小限に */
     }
-    div[data-testid="stHorizontalBlock"] > div {
+    [data-testid="column"] {
         width: 14.28% !important;
+        flex: 1 1 14.28% !important;
         min-width: 0 !important;
-        flex: 1 1 0% !important;
+        padding: 0 !important;
     }
-    /* ボタンをカレンダーの「枠」としてデザイン */
+    
+    /* 2. ボタンを「きれいな枠」に変える */
     .stButton > button {
         width: 100% !important;
-        height: 60px !important;
+        height: 52px !important; /* HTMLテーブルに近い高さ */
         padding: 0 !important;
-        border-radius: 10px !important;
+        margin: 0 !important;
+        border-radius: 4px !important;
         border: 1px solid #f0f0f0 !important;
         background-color: white !important;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.03) !important;
-        transition: all 0.2s;
-        display: flex !important;
-        flex-direction: column !important;
-        align-items: center !important;
-        justify-content: center !important;
+        font-size: 0.8rem !important;
+        line-height: 1.2 !important;
+        display: block !important;
     }
-    /* 出勤日の枠（ピンク） */
+
+    /* 3. シフトがある日のデザイン */
     .has-shift button {
-        background-color: #FFF9FA !important;
-        border: 1px solid #FFD1D9 !important;
+        background-color: #FFF5F7 !important;
+        border-bottom: 3px solid #FF4B4B !important; /* 下線で出勤を強調 */
     }
-    /* 選択中の枠（赤太枠） */
+
+    /* 4. 選択中の日のデザイン */
     .selected-day button {
         border: 2px solid #FF4B4B !important;
         background-color: #FFF0F2 !important;
-        box-shadow: 0 0 8px rgba(255,75,75,0.2) !important;
+        z-index: 10;
     }
-    /* 今日の枠（点線または細い色枠） */
-    .is-today button {
-        background-color: #F0F7FF !important;
-    }
-    /* 曜日ラベル */
-    .wd-label { text-align: center; font-size: 0.7em; font-weight: bold; padding-bottom: 5px; }
+
+    /* 5. 曜日のラベル */
+    .wd-label { text-align: center; font-size: 0.7rem; font-weight: bold; margin-bottom: 5px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 🛰 同期関数（1,500名対応・個人最適化版） ---
+# --- 2. 🛰 同期関数（ ver 1.11 仕様） ---
 def sync_personal_shift(login_id, hp_name, shop_id):
-    """自分のデータだけをリフレッシュ取得"""
     try:
         today = datetime.date.today()
         conn.table("shifts").delete().eq("cast_id", login_id).gte("date", today.isoformat()).lte("date", (today + datetime.timedelta(days=7)).isoformat()).execute()
@@ -95,10 +92,11 @@ def sync_personal_shift(login_id, hp_name, shop_id):
 
 # --- 3. 🔐 ログイン認証 ---
 if "user_info" not in st.session_state:
-    input_id = st.text_input("ID")
-    input_pw = st.text_input("PW", type="password")
+    st.markdown("### 🔐 Login")
+    in_id = st.text_input("ログインID")
+    in_pw = st.text_input("パスワード", type="password")
     if st.button("ログイン"):
-        r = conn.table("cast_members").select("*").eq("login_id", input_id.zfill(8)).eq("password", input_pw).execute()
+        r = conn.table("cast_members").select("*").eq("login_id", in_id.zfill(8)).eq("password", in_pw).execute()
         if r.data:
             st.session_state["user_info"] = r.data[0]
             st.rerun()
@@ -108,43 +106,43 @@ if "user_info" not in st.session_state:
 user = st.session_state["user_info"]
 now = datetime.date.today()
 
-# 状態管理
+# 状態管理（選択された日付）
 if "selected_date" not in st.session_state:
     st.session_state.selected_date = now.isoformat()
 
-# A. 売上見込み
+# 売上見込み
 st.markdown(f"""
     <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 15px; border-radius: 15px; text-align: center; margin-bottom: 20px;">
-        <span style="font-size: 1.8em; font-weight: bold; color: #333;">¥ 28,500 GET!</span>
+        <span style="font-size: 1.5em; font-weight: bold; color: #333;">¥ 28,500 GET!</span>
     </div>
     """, unsafe_allow_html=True)
 
-# B. ヘッダー & 同期
+# ヘッダー
 c1, c2 = st.columns([0.7, 0.3])
-with c1: st.subheader("📅 カレンダー")
+with c1: st.markdown("**📅 スケジュール**")
 with c2:
-    if st.button("🔄 同期"):
+    if st.button("🔄 同期", key="sync"):
         cnt = sync_personal_shift(user['login_id'], user['hp_display_name'], user['home_shop_id'])
         st.toast(f"{cnt}件更新完了")
         st.rerun()
 
-# シフトデータ取得
+# シフト取得
 try:
     s_res = conn.table("shifts").select("date, shift_time").eq("cast_id", user['login_id']).execute()
     s_map = {s['date']: s['shift_time'] for s in s_res.data}
 except: s_map = {}
 
-# C. カレンダー描画（インタラクティブ版）
+# --- 🗓️ カレンダー描画（ ver 1.11 安定版） ---
 year, month = now.year, now.month
 cal = calendar.monthcalendar(year, month)
 
-# 曜日ラベル
+# 曜日ヘッダー
 cols_h = st.columns(7)
 for i, wd in enumerate(["月","火","水","木","金","土","日"]):
     color = "#FF3B30" if i==6 else "#007AFF" if i==5 else "#999"
     cols_h[i].markdown(f"<div class='wd-label' style='color:{color};'>{wd}</div>", unsafe_allow_html=True)
 
-# 日付ボタン
+# 日付ボタンの配置
 for week in cal:
     cols = st.columns(7)
     for i, day in enumerate(week):
@@ -156,28 +154,28 @@ for week in cal:
             
             # クラス判定
             cls = "has-shift" if is_s else ""
-            if is_sel: cls += " selected-day"
-            if d_obj == now: cls += " is-today"
+            if is_sel: cls = "selected-day" # 選択を最優先
             
-            # 表示テキスト（数字とドット）
+            # ラベル（出勤日は●を表示）
             label = f"{day}\n●" if is_s else str(day)
             
+            # 枠を描画
             st.markdown(f'<div class="{cls}">', unsafe_allow_html=True)
-            if cols[i].button(label, key=f"btn_{d_str}"):
+            if cols[i].button(label, key=f"btn_{year}_{month}_{day}"):
                 st.session_state.selected_date = d_str
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
         else:
             cols[i].empty()
 
-# D. 予定詳細エリア
+# D. 予定詳細
 st.divider()
 sel_d = datetime.date.fromisoformat(st.session_state.selected_date)
-st.markdown(f"### 📝 {sel_d.month}月{sel_d.day}日の予定")
+st.markdown(f"**📝 {sel_d.month}/{sel_d.day} の詳細**")
 
 with st.container(border=True):
     if st.session_state.selected_date in s_map:
-        st.success(f"⏰ 出勤予定：{s_map[st.session_state.selected_date]}")
-        st.info("🏢 勤務店舗：池袋西口店")
+        st.success(f"⏰ **出勤：{s_map[st.session_state.selected_date]}**")
+        st.caption("🏢 勤務店舗：池袋西口店")
     else:
-        st.write("この日の出勤予定はありません")
+        st.write("予定なし")
