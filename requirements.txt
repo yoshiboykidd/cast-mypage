@@ -2,4 +2,6 @@ streamlit
 st-supabase-connection
 gspread
 google-auth
+requests
+beautifulsoup4
 jpholiday
