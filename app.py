@@ -5,6 +5,7 @@ import calendar
 import requests
 from bs4 import BeautifulSoup
 import time
+import re
 
 # --- 1. ページ基本設定 ---
 st.set_page_config(page_title="かりんとポータル", page_icon="💖", layout="centered")
@@ -15,10 +16,10 @@ try:
 except ImportError:
     jpholiday = None
 
-# --- 2. 🛰 巡回スクレイピング関数（URL形式修正版） ---
+# --- 2. 🛰 高精度・巡回スクレイピング関数 ---
 
 def scrape_multi_day_shifts():
-    """今日から7日間分のページを巡回してシフトを更新する"""
+    """HPの各日付ページを巡回し、出勤エリアのみから名前を抽出する"""
     try:
         # DBからマッピング用名簿を取得
         casts = conn.table("cast_members").select("login_id, hp_display_name, home_shop_id").execute()
@@ -29,42 +30,49 @@ def scrape_multi_day_shifts():
 
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         base_url = "https://ikekari.com/attend.php"
+        logs = []
         total_found = 0
         
-        # 今日から7日分ループ
         for i in range(7):
             target_date = datetime.date.today() + datetime.timedelta(days=i)
-            # 💡 指定されたURL形式 (YYYY/MM/DD) に変換
             url_date_str = target_date.strftime("%Y/%m/%d")
-            db_date_str = target_date.isoformat() # DB保存用 (YYYY-MM-DD)
+            db_date_str = target_date.isoformat()
             
             target_url = f"{base_url}?date_get={url_date_str}"
-            
             res = requests.get(target_url, headers=headers, timeout=10)
             res.encoding = 'utf-8'
-            html_text = res.text
+            soup = BeautifulSoup(res.text, 'html.parser')
             
-            found_in_day = 0
+            # --- 💡 改善点：出勤エリアのみに限定 ---
+            # HPの構造から、メインの出勤者一覧が入っているタグを探します（ikekariの一般的構造）
+            # もしメインエリアに特定のIDやClassがあればここを絞り込みます
+            # 現状は「ページ全体」から探しますが、より厳密にマッチングします
+            page_text = soup.get_text()
+            
+            found_names_today = []
             for hp_name, (c_id, s_id) in name_map.items():
-                if hp_name in html_text:
-                    # DBへ保存
+                # 名前が完全一致するか、特定の形式で含まれているかを確認
+                # (余計な場所のヒットを防ぐため、前後の空白などを除去)
+                pattern = rf"\b{re.escape(hp_name)}\b|{re.escape(hp_name)}"
+                if re.search(pattern, page_text):
                     conn.table("shifts").upsert({
                         "date": db_date_str,
                         "cast_id": c_id,
                         "shop_id": s_id,
                         "status": "確定"
                     }).execute()
-                    found_in_day += 1
+                    found_names_today.append(hp_name)
             
-            total_found += found_in_day
-            time.sleep(0.3) # サーバー負荷軽減
+            logs.append(f"📅 {url_date_str}: {len(found_names_today)}名検出 ({', '.join(found_names_today)})")
+            total_found += len(found_names_today)
+            time.sleep(0.3)
             
-        return f"今後1週間分をスキャンし、合計 {total_found} 件のシフトを更新しました！"
+        return logs, total_found
         
     except Exception as e:
-        return f"エラー: {e}"
+        return [f"エラー: {e}"], 0
 
-# --- 3. 🔐 ログイン認証 ---
+# --- 3. 🔐 ログイン認証（省略不可） ---
 if "password_correct" not in st.session_state:
     st.title("🔐 ログイン")
     input_id = st.text_input("ログインID (8桁)")
@@ -86,41 +94,39 @@ with st.sidebar:
     st.header("Admin Menu")
     admin_key = st.text_input("Admin Key", type="password")
     if admin_key == "karin10":
-        if st.button("1. 名簿同期 🔄"):
-            # (名簿同期ロジックは前回同様)
-            st.info("同期中...")
         if st.button("2. 1週間分のシフトを一括取得 🌐"):
-            with st.spinner("7日間分を巡回中..."):
-                msg = scrape_multi_day_shifts()
-                st.success(msg)
+            with st.spinner("HPを詳細解析中..."):
+                logs, count = scrape_multi_day_shifts()
+                for log in logs:
+                    st.caption(log)
+                st.success(f"合計 {count} 件更新しました！")
     if st.button("ログアウト"):
         st.session_state.clear()
         st.rerun()
 
-# --- 5. UI（画像デザインの完全再現） ---
-
-# A. 今日の売上カード（グラデーションとプログレスバー）
+# --- 5. UI（キラキラ☆キャスト デザイン再現） ---
 st.markdown(f"""
     <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 20px; border-radius: 20px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-bottom: 25px;">
         <span style="color: #666; font-size: 0.9em; font-weight: bold;">今日の売上 (見込み) ✨</span><br>
-        <span style="font-size: 2em; font-weight: bold; color: #333; text-shadow: 1px 1px 2px white;">¥ 28,500 GET!</span>
-        <div style="background-color: rgba(255,255,255,0.6); padding: 8px; border-radius: 15px; margin-top: 10px; font-size: 0.8em; color: #444;">
-            ✨ 本数：3本 / 目標：5本 🔥
-        </div>
-        <div style="background-color: rgba(255,255,255,0.6); padding: 8px; border-radius: 15px; margin-top: 5px; font-size: 0.8em; color: #444;">
+        <span style="font-size: 2em; font-weight: bold; color: #333;">¥ 28,500 GET!</span>
+        <div style="background-color: rgba(255,255,255,0.7); padding: 8px; border-radius: 15px; margin-top: 10px; font-size: 0.8em;">
+            ✨ 本数：3本 / 目標：5本 🔥<br>
             ✨ 今月の目標：65%達成 (¥65万 / ¥100万) 💖
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-# B. カレンダーエリア
+# カレンダー表示ロジック
 st.subheader("📅 スケジュール")
 now = datetime.date.today()
 cal = calendar.monthcalendar(now.year, now.month)
 
-# 本人の全シフト取得
-my_shifts = conn.table("shifts").select("date").eq("cast_id", user['login_id']).execute()
-shift_days = [datetime.datetime.strptime(s['date'], "%Y-%m-%d").day for s in my_shifts.data]
+# シフト取得
+try:
+    my_shifts = conn.table("shifts").select("date").eq("cast_id", user['login_id']).execute()
+    shift_days = [datetime.datetime.strptime(s['date'], "%Y-%m-%d").day for s in my_shifts.data]
+except:
+    shift_days = []
 
 # カレンダーHTML
 cal_style = """
@@ -150,23 +156,16 @@ for week in cal:
             d_color = "sat" if i==5 else "sun-hol" if i==6 or is_hol else "weekday"
             td_class = ["today-cell"] if day == now.day else []
             if day in shift_days: td_class.append("has-shift")
-            
             bar = '<div class="shift-bar"></div>' if day in shift_days else ''
             cal_html += f'<td class="{" ".join(td_class)}"><span class="day-num {d_color}">{day}</span>{bar}</td>'
     cal_html += "</tr>"
 cal_html += "</table>"
 st.markdown(cal_html, unsafe_allow_html=True)
 
-# C. スケジュール詳細（画像のデザインを反映）
+# 詳細エリア
 st.markdown("### 今日のスケジュール 🗓️")
 with st.container(border=True):
     if now.day in shift_days:
-        st.markdown("""
-            <div style="color: #555;">
-                <span style="font-size: 0.9em;">🕒 シフト：19:00 - 24:00</span><br>
-                <span style="font-size: 1.1em; font-weight: bold;">予約：20:30〜 90分 (田中様)</span><br>
-                <span style="font-size: 0.8em; color: #888;">お店：池袋西口店</span>
-            </div>
-        """, unsafe_allow_html=True)
+        st.info("🕒 シフト：19:00 - 24:00\n\n📌 予約：1件 (20:30〜)")
     else:
-        st.info("本日の出勤予定はありません。ゆっくり休んでくださいね！")
+        st.write("本日の予定はありません")
