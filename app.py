@@ -17,7 +17,7 @@ except ImportError:
 # --- 2. 🛰 統合同期 & スクレイピング関数 ---
 
 def sync_all_data():
-    """スプレッドシートから店舗・名簿（HP表示名含む）を同期"""
+    """スプレッドシートから名簿を同期（列名のマッピング修正版）"""
     import gspread
     from google.oauth2.service_account import Credentials
     try:
@@ -34,7 +34,7 @@ def sync_all_data():
                 row['shop_id'] = str(row['shop_id']).zfill(3)
             conn.table("shop_master").upsert(shop_data).execute()
 
-        # B. キャスト名簿（「HP表示名」を読み込む）
+        # B. キャスト名簿（「HP表示名」の読み込み）
         all_casts = []
         for sheet in sh.worksheets():
             if sheet.title == "店舗一覧": continue
@@ -43,8 +43,10 @@ def sync_all_data():
                 for row in data:
                     row['login_id'] = str(row['login_id']).zfill(8)
                     row['home_shop_id'] = str(row['home_shop_id']).zfill(3)
-                    # スプレッドシートの「HP表示名」をDBに保存
-                    # row['hp_display_name'] はシートの列名と一致させる必要があります
+                    row['password'] = str(row['password'])
+                    # --- 💡 重要：スプレッドシートの「HP表示名」をDBの「hp_display_name」に変換 ---
+                    if "HP表示名" in row:
+                        row['hp_display_name'] = row.pop("HP表示名")
                 all_casts.extend(data)
         
         if all_casts:
@@ -56,47 +58,49 @@ def sync_all_data():
         return None, None
 
 def scrape_and_update_shifts():
-    """公式HPから今日の出勤者を読み取り、シフトを自動登録する"""
+    """HPから名前を検出する（タグに依存しない高精度版）"""
     try:
-        # 1. HPのHTMLを取得
-        url = "https://ikekari.com/attend.php"
-        res = requests.get(url, timeout=10)
-        res.encoding = 'utf-8'
-        soup = BeautifulSoup(res.text, 'html.parser')
-        
-        # 2. HP上の名前をリストアップ（サイト構造に合わせて調整）
-        # ikekari.comの構造に基づき、キャスト名のタグを抽出
-        scraped_names = [tag.text.strip() for tag in soup.find_all(class_="name")]
-        
-        if not scraped_names:
-            return "HPから名前を検出できませんでした。"
-
-        # 3. DBから「HP表示名」と「ID」のペアを取得
+        # 1. DBから「HP表示名」のリストを先に取得
         casts = conn.table("cast_members").select("login_id, hp_display_name, home_shop_id").execute()
-        name_to_id = {c['hp_display_name']: (c['login_id'], c['home_shop_id']) for c in casts.data if c['hp_display_name']}
+        # { "はなこ": ("00100001", "001"), ... } の辞書を作る
+        name_map = {c['hp_display_name']: (c['login_id'], c['home_shop_id']) for c in casts.data if c['hp_display_name']}
+        
+        if not name_map:
+            return "DBに『HP表示名』が登録されていません。先に名簿同期をしてください。"
 
-        # 4. 一致するキャストのシフトを登録
+        # 2. HPを読み込む（ブラウザのふりをするUser-Agentを追加）
+        url = "https://ikekari.com/attend.php"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        res = requests.get(url, headers=headers, timeout=15)
+        res.encoding = 'utf-8'
+        html_text = res.text
+        
+        # 3. 検出：HPの文字全体の中に、登録名が含まれているか1人ずつチェック
         today = datetime.date.today().isoformat()
-        count = 0
-        for name in scraped_names:
-            if name in name_to_id:
-                c_id, s_id = name_to_id[name]
+        found_count = 0
+        
+        for hp_name, (c_id, s_id) in name_map.items():
+            if hp_name in html_text:
+                # 名前が見つかったらシフトを登録
                 conn.table("shifts").upsert({
                     "date": today,
                     "cast_id": c_id,
                     "shop_id": s_id,
                     "status": "確定"
                 }).execute()
-                count += 1
+                found_count += 1
         
-        return f"本日のシフトを {count} 名分更新しました！"
+        if found_count == 0:
+            return "HPを読み込みましたが、一致する名前がありませんでした（名簿の『HP表示名』と一致しているか確認してください）。"
+        
+        return f"本日の出勤者 {found_count} 名を検出し、シフトを更新しました！"
+        
     except Exception as e:
-        return f"スクレイピング失敗: {e}"
+        return f"エラーが発生しました: {e}"
 
 # --- 3. 🔐 ログイン認証 ---
 if "password_correct" not in st.session_state:
     st.title("🔐 ログイン")
-    # 簡易版ログイン（実際はDB照合）
     input_id = st.text_input("ログインID (8桁)")
     input_pw = st.text_input("パスワード", type="password")
     if st.button("ログイン"):
@@ -112,24 +116,26 @@ if "password_correct" not in st.session_state:
 # --- 4. メイン画面 ---
 user = st.session_state["user_info"]
 
-# サイドバー（管理者用ボタン）
+# サイドバー（管理者用）
 with st.sidebar:
     st.header("Admin Menu")
     admin_key = st.text_input("Admin Key", type="password")
     if admin_key == "karin10":
-        if st.button("名簿同期 🔄"):
-            sync_all_data()
-        if st.button("HPから本日のシフト取得 🌐"):
-            msg = scrape_and_update_shifts()
-            st.success(msg)
+        if st.button("1. 名簿同期 🔄"):
+            s, c = sync_all_data()
+            if s is not None: st.success(f"名簿更新完了! ({c}名)")
+        if st.button("2. HPからシフト取得 🌐"):
+            with st.spinner("HPを解析中..."):
+                msg = scrape_and_update_shifts()
+                st.info(msg)
     if st.button("ログアウト"):
         st.session_state.clear()
         st.rerun()
 
-# 売上見込み表示
+# --- 5. UI（デザイン再現） ---
 st.markdown(f"""
-    <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 15px; border-radius: 15px; text-align: center; margin-bottom: 20px;">
-        <span style="color: #666; font-size: 0.8em;">今日の売上 (見込み) ✨</span><br>
+    <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 15px; border-radius: 15px; text-align: center; margin-bottom: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+        <span style="color: #666; font-size: 0.8em; font-weight: bold;">今日の売上 (見込み) ✨</span><br>
         <span style="font-size: 1.8em; font-weight: bold; color: #333;">¥ 28,500 GET!</span>
     </div>
     """, unsafe_allow_html=True)
@@ -140,11 +146,14 @@ now = datetime.date.today()
 year, month = now.year, now.month
 cal = calendar.monthcalendar(year, month)
 
-# 本人のシフト日をDBから取得
-my_shifts = conn.table("shifts").select("date").eq("cast_id", user['login_id']).execute()
-shift_days = [datetime.datetime.strptime(s['date'], "%Y-%m-%d").day for s in my_shifts.data]
+# 本人のシフトをDBから取得
+try:
+    my_shifts = conn.table("shifts").select("date").eq("cast_id", user['login_id']).execute()
+    shift_days = [datetime.datetime.strptime(s['date'], "%Y-%m-%d").day for s in my_shifts.data]
+except:
+    shift_days = []
 
-# カレンダーHTML構築（視認性強化版）
+# カレンダーHTML構築
 cal_style = """
 <style>
     .calendar-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -173,14 +182,14 @@ for week in cal:
             td_class = []
             if day == now.day: td_class.append("today-cell")
             if day in shift_days: td_class.append("has-shift")
-            
             bar = '<div class="shift-bar"></div>' if day in shift_days else ''
             cal_html += f'<td class="{" ".join(td_class)}"><span class="day-num {d_color}">{day}</span>{bar}</td>'
-    cal_html += "</tr></table>"
+    cal_html += "</tr>"
+cal_html += "</table>"
 
 st.markdown(cal_html, unsafe_allow_html=True)
 
-# 詳細エリア
+# 予定詳細
 st.divider()
 st.subheader("📝 本日の予定")
 with st.container(border=True):
