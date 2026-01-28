@@ -1,95 +1,152 @@
 import streamlit as st
 from st_supabase_connection import SupabaseConnection
+import gspread
+from google.oauth2.service_account import Credentials
 
-# 【重要】掟：何よりも先にこれを書く
-st.set_page_config(
-    page_title="かりんとグループ | キャストポータル",
-    page_icon="💖",
-    layout="centered"
-)
+# --- 1. ページ基本設定 ---
+st.set_page_config(page_title="かりんとグループ | キャストポータル", page_icon="💖", layout="centered")
 
-# --- 🔐 ログイン機能の定義 ---
+# Supabase接続
+conn = st.connection("supabase", type=SupabaseConnection)
+
+# --- 2. 🛰 Googleスプレッドシート同期関数 ---
+def sync_cast_master():
+    """Googleスプレッドシートから全店舗の名簿を取得し、Supabaseに同期する"""
+    try:
+        # 認証設定
+        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
+        client = gspread.authorize(creds)
+        
+        # スプレッドシートをIDで開く
+        sh = client.open_by_key(st.secrets["spreadsheet"]["id"])
+        all_casts = []
+        
+        # 全シートをループ（店舗ごとにシートが分かれている前提）
+        for sheet in sh.worksheets():
+            # 「店舗一覧」シートは名簿ではないのでスキップ
+            if sheet.title == "店舗一覧":
+                continue
+            
+            # シートの全データを取得（1行目が見出し：login_id, password, display_name, home_shop_id）
+            data = sheet.get_all_records()
+            if data:
+                all_casts.extend(data)
+        
+        if all_casts:
+            # Supabaseのテーブルを一度クリアして、最新名簿をインサート（全件入れ替え）
+            # 注意: 実績(daily_earnings)は消さず、名簿(cast_members)のみを更新
+            conn.table("cast_members").delete().neq("login_id", "0").execute()
+            conn.table("cast_members").insert(all_casts).execute()
+            return len(all_casts)
+        return 0
+    except Exception as e:
+        st.error(f"同期エラーが発生しました: {e}")
+        return None
+
+# --- 3. 🔐 ログイン認証ロジック ---
 def check_password():
-    """パスワードが正しいかチェックする関数"""
+    """ユーザーがログインしているか確認し、ログイン画面またはコンテンツを表示する"""
     def password_entered():
-        # Streamlit CloudのSecretsに設定したパスワードと比較
-        if st.session_state["password"] == st.secrets["auth"]["password"]:
+        # DBからIDとPWが一致するユーザーを1件取得
+        user = conn.table("cast_members") \
+            .select("*") \
+            .eq("login_id", st.session_state["login_id"]) \
+            .eq("password", st.session_state["password_input"]) \
+            .execute()
+
+        if user.data:
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # セッションから一時パスワードを消去
+            st.session_state["user_info"] = user.data[0] # キャスト情報を保存
+            del st.session_state["password_input"] # 安全のため入力フォームのPWを削除
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        # まだパスワードを入力していない状態
-        st.title("🔐 関係者専用ページ")
-        st.text_input(
-            "パスワードを入力してください", 
-            type="password", 
-            on_change=password_entered, 
-            key="password"
-        )
+        # 初回表示（未ログイン）
+        st.title("🔐 かりんとグループ ログイン")
+        st.text_input("ログインID (8桁)", key="login_id")
+        st.text_input("パスワード", type="password", key="password_input")
+        st.button("ログイン", on_click=password_entered)
         return False
     elif not st.session_state["password_correct"]:
-        # パスワードが間違っていた状態
-        st.title("🔐 関係者専用ページ")
-        st.text_input(
-            "パスワードを入力してください", 
-            type="password", 
-            on_change=password_entered, 
-            key="password"
-        )
-        st.error("😕 パスワードが違います")
+        # パスワード間違い
+        st.title("🔐 かりんとグループ ログイン")
+        st.error("⚠️ IDまたはパスワードが正しくありません")
+        st.text_input("ログインID (8桁)", key="login_id")
+        st.text_input("パスワード", type="password", key="password_input")
+        st.button("ログイン", on_click=password_entered)
         return False
-    else:
-        # パスワードが合っている状態
-        return True
+    return True
 
-# --- メインロジック ---
+# --- 4. メインコンテンツ ---
 if check_password():
-    # ログイン成功後、ここから下のコードが実行されます
+    user = st.session_state["user_info"]
     
-    # Supabase接続
-    conn = st.connection("supabase", type=SupabaseConnection)
+    # サイドバー：管理者用同期ボタンとログアウト
+    with st.sidebar:
+        st.write(f"👤 ログイン中: {user['display_name']} さん")
+        st.divider()
+        st.subheader("⚙️ 管理者メニュー")
+        if st.button("名簿を最新に更新 🔄"):
+            with st.spinner("スプレッドシートから全店舗データを同期中..."):
+                count = sync_cast_master()
+                if count is not None:
+                    st.success(f"同期完了！全 {count} 名の名簿を更新しました。")
+        
+        if st.button("ログアウト"):
+            st.session_state.clear()
+            st.rerun()
 
-    # 画面表示
-    st.title("💖 キャスト実績入力")
+    # メイン画面：マイページ表示
+    st.title(f"💖 {user['display_name']} さんのマイページ")
     
-    # サイドバー（ログイン中の名前など）
-    st.sidebar.title("👤 キャスト認証")
-    cast_name = st.sidebar.text_input("名前またはIDを入力", value="TEST_001")
-    
-    st.write(f"お疲れ様です、**{cast_name}** さん！今日の頑張りを記録しましょう✨")
+    # 店舗一覧をDBから取得（店舗プルダウン用）
+    shops = conn.table("shop_master").select("*").execute()
+    shop_options = {item['shop_id']: item['shop_name'] for item in shops.data}
+    shop_ids = list(shop_options.keys())
 
-    # 入力フォーム
+    # 実績入力フォーム
     with st.form("earnings_form", clear_on_submit=True):
-        st.subheader("💰 本日の実績")
+        st.subheader("📝 本日の実績報告")
+        
+        # デフォルトで自分の本拠地(home_shop_id)を選択状態にする
+        default_idx = shop_ids.index(user['home_shop_id']) if user['home_shop_id'] in shop_ids else 0
+        
+        selected_shop_id = st.selectbox(
+            "勤務店舗（ヘルプの場合は変更してください）",
+            options=shop_ids,
+            format_func=lambda x: f"{x}: {shop_options[x]}",
+            index=default_idx
+        )
+        
+        amount = st.number_input("給与（円）", min_value=0, step=1000)
         work_date = st.date_input("稼働日")
-        amount = st.number_input("本日の給与 (円)", min_value=0, step=1000)
-        memo = st.text_area("内容メモ")
-        submit_button = st.form_submit_button("この内容で保存する ✨")
-
-    if submit_button:
-        try:
-            insert_data = {
-                "cast_id": cast_name,
-                "date": work_date.isoformat(),
+        memo = st.text_area("メモ（接客内容やヘルプ報告など）")
+        
+        if st.form_submit_button("実績を保存する ✨"):
+            conn.table("daily_earnings").insert({
+                "cast_id": user['login_id'],
+                "shop_id": selected_shop_id,
                 "amount": amount,
+                "date": work_date.isoformat(),
                 "memo": memo
-            }
-            conn.table("daily_earnings").insert(insert_data).execute()
-            st.success(f"保存しました！今日もお疲れ様でした 🌈")
+            }).execute()
+            st.success("実績を保存しました！お疲れ様でした。")
             st.balloons()
-        except Exception as e:
-            st.error(f"エラーが発生しました: {e}")
 
+    # 履歴表示（直近10件）
     st.divider()
-
-    # 履歴表示
-    st.subheader("📅 最近の入力履歴")
-    try:
-        history = conn.table("daily_earnings").select("*").eq("cast_id", cast_name).order("date", desc=True).limit(5).execute()
-        if history.data:
-            for item in history.data:
-                st.write(f"📅 {item['date']} | **¥{item['amount']:,}** | {item['memo'] or ''}")
-    except:
-        st.write("履歴が読み込めませんでした。")
+    st.subheader("📊 あなたの最近の実績")
+    history = conn.table("daily_earnings") \
+        .select("*") \
+        .eq("cast_id", user['login_id']) \
+        .order("date", desc=True) \
+        .limit(10) \
+        .execute()
+    
+    if history.data:
+        # 表示用にデータを整理
+        st.dataframe(history.data, use_container_width=True)
+    else:
+        st.info("まだ実績データがありません。")
