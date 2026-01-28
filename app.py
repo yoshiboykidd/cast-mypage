@@ -27,20 +27,24 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-# B. 【改善版】絶対に崩れないカレンダー
+# B. 【改善版】シフトがわかるカレンダー
 st.subheader("📅 カレンダー")
 
 now = datetime.datetime.now()
 year, month = now.year, now.month
 cal = calendar.monthcalendar(year, month)
 
-# HTMLでカレンダーを直接記述（これが一番確実です）
+# --- 💡 テスト用：シフトが入っている日（実際はDBから取得） ---
+# 例：28日、30日、31日にシフトがあるとする
+shift_days = [28, 30, 31]
+
+# HTML/CSSでカレンダーを構築
 cal_html = f"""
 <style>
     .calendar-table {{
         width: 100%;
         border-collapse: collapse;
-        table-layout: fixed; /* これで列幅を均等に固定 */
+        table-layout: fixed;
     }}
     .calendar-table th {{
         text-align: center;
@@ -50,21 +54,33 @@ cal_html = f"""
     }}
     .calendar-table td {{
         text-align: center;
-        padding: 8px 0;
-        border: 1px solid #eee;
+        padding: 10px 0;
+        border: 1px solid #f0f0f0;
         font-size: 0.9em;
         background-color: white;
-        border-radius: 5px;
+        position: relative; /* ドットを配置するために必要 */
     }}
+    /* シフトがある日の印（ピンクのドット） */
+    .has-shift::after {{
+        content: '●';
+        color: #FF4B4B;
+        font-size: 8px;
+        position: absolute;
+        bottom: 2px;
+        left: 50%;
+        transform: translateX(-50%);
+    }}
+    /* 今日のハイライト */
     .today-cell {{
         background-color: #FF4B4B !important;
         color: white !important;
         font-weight: bold;
+        border-radius: 5px;
     }}
 </style>
 <table class="calendar-table">
     <tr>
-        <th>月</th><th>火</th><th>水</th><th>木</th><th>金</th><th>土</th><th style="color:red;">日</th>
+        <th>月</th><th>火</th><th>水</th><th>木</th><th>金</th><th style="color:#007AFF;">土</th><th style="color:red;">日</th>
     </tr>
 """
 
@@ -74,24 +90,34 @@ for week in cal:
         if day == 0:
             cal_html += "<td></td>"
         else:
-            style_class = "today-cell" if day == now.day else ""
-            cal_html += f'<td class="{style_class}">{day}</td>'
+            classes = []
+            if day == now.day:
+                classes.append("today-cell")
+            if day in shift_days:
+                classes.append("has-shift")
+            
+            class_str = f'class="{" ".join(classes)}"' if classes else ""
+            cal_html += f'<td {class_str}>{day}</td>'
     cal_html += "</tr>"
 
 cal_html += "</table>"
 
-# HTMLを埋め込む
+# カレンダーの表示
 st.markdown(cal_html, unsafe_allow_html=True)
 
-# C. 今日のスケジュール詳細
+# C. 本日の予定（カレンダーの下）
 st.divider()
 st.markdown(f"### 📝 本日の予定")
 
 with st.container(border=True):
-    # ここに将来 shifts テーブルのデータを表示する
-    st.write("**⏰ シフト：19:00 - 24:00**")
-    st.write("📌 予約：1件 (20:30〜)")
-    st.caption("店舗：池袋西口店")
+    # シフトがあるかないかで表示を分ける
+    if now.day in shift_days:
+        st.success("✅ 本日は出勤予定です")
+        st.write("**⏰ 19:00 - 24:00**")
+        st.write("🏢 池袋西口店")
+        st.caption("📌 予約あり：20:30〜 田中様")
+    else:
+        st.info("本日の出勤予定はありません")
 
 # D. お知らせエリア
 st.divider()
