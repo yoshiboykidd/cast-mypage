@@ -19,36 +19,30 @@ except ImportError:
 # --- ✨ スマホ用・横7列死守＆デザインCSS ---
 st.markdown("""
     <style>
-    /* カレンダーの7列をスマホでも強制維持 */
     [data-testid="column"] {
         width: calc(14.28% - 0.2rem) !important;
         flex: 1 1 calc(14.28% - 0.2rem) !important;
         min-width: calc(14.28% - 0.2rem) !important;
+    }
+    .stButton > button {
+        height: 48px !important;
         padding: 0 !important;
+        font-size: 0.8rem !important;
+        background-color: white !important;
+        border: 1px solid #f8f8f8 !important;
+        border-radius: 8px !important;
     }
-    /* 同期ボタンのスタイル */
-    .sync-btn button {
-        background-color: #FFF0F2 !important;
-        color: #FF4B4B !important;
-        border: 1px solid #FF4B4B !important;
-        border-radius: 20px !important;
-        font-size: 0.7em !important;
-        height: 30px !important;
-    }
-    /* カレンダーマスの高さと配置 */
-    .calendar-table td { height: 50px; position: relative; vertical-align: top; border: 1px solid #f8f8f8; }
-    .day-num { font-size: 0.7em; font-weight: bold; position: absolute; top: 3px; left: 5px; }
-    .shift-bar { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%); width: 18px; height: 4px; background-color: #FF4B4B; border-radius: 10px; }
+    .has-shift button { background-color: #FFF5F7 !important; border-bottom: 3px solid #FF4B4B !important; }
+    .today-cell button { border: 2px solid #FF4B4B !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 🛰 マイシフト専用・同期関数 ---
+# --- 2. 🛰 巡回同期関数（時間解析・強化版） ---
 
 def sync_my_personal_shift(login_id, hp_name, shop_id):
-    """自分のシフトだけを今後7日間分、HPから取得して更新する"""
     try:
         today = datetime.date.today()
-        # 自分の今後7日間のデータのみを一旦削除（リフレッシュ）
+        # 自分の今後7日間のデータをリフレッシュ
         conn.table("shifts").delete().eq("cast_id", login_id).gte("date", today.isoformat()).lte("date", (today + datetime.timedelta(days=7)).isoformat()).execute()
 
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -62,14 +56,26 @@ def sync_my_personal_shift(login_id, hp_name, shop_id):
             res.encoding = 'utf-8'
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            # HPのテキスト全体から自分の名前を検索
-            page_text = soup.get_text()
-            if hp_name in page_text:
-                # 名前が見つかった場合、周辺から時間を抽出
-                name_element = soup.find(string=re.compile(re.escape(hp_name)))
-                time_match = re.search(r'(\d{1,2}:\d{2}.{1,7}\d{1,2}:\d{2})|(\d{1,2}:\d{2}〜)', str(name_element.parent))
-                shift_time = time_match.group(0) if time_match else "時間未定"
+            # --- 💡 解析ロジック強化 ---
+            # 1. ページ内のすべてのテキストから名前を探す
+            # 2. 名前が見つかったら、その「周辺（親の親まで）」のテキストを抜き出す
+            target_element = soup.find(string=re.compile(re.escape(hp_name.strip())))
+            
+            if target_element:
+                # 3階層上まで遡って、そのエリア全体のテキストを取得（時間を見逃さないため）
+                container_text = ""
+                parent = target_element.parent
+                for _ in range(3):
+                    if parent:
+                        container_text += parent.get_text() + " "
+                        parent = parent.parent
                 
+                # 時間のパターンを抽出 (19:00〜, 20:00〜24:00, 19-24など)
+                # 全角「〜」や「：」にも対応
+                time_pattern = r'(\d{1,2}[:：]\d{2}.{0,5}\d{1,2}[:：]\d{2})|(\d{1,2}[:：]\d{2}.{0,2}[〜~〜-])'
+                time_match = re.search(time_pattern, container_text)
+                shift_time = time_match.group(0) if time_match else "時間未定"
+
                 conn.table("shifts").insert({
                     "date": target_date.isoformat(),
                     "cast_id": login_id,
@@ -81,7 +87,7 @@ def sync_my_personal_shift(login_id, hp_name, shop_id):
             time.sleep(0.2)
         return found_count
     except Exception as e:
-        st.error(f"同期に失敗しました: {e}")
+        st.error(f"同期エラー: {e}")
         return 0
 
 # --- 3. 🔐 ログイン認証 ---
@@ -96,79 +102,78 @@ if "password_correct" not in st.session_state:
             st.session_state["user_info"] = user_res.data[0]
             st.rerun()
         else:
-            st.error("IDまたはパスワードが違います")
+            st.error("認証失敗")
     st.stop()
 
-# --- 4. メイン画面 ---
+# --- 4. メインレイアウト ---
 user = st.session_state["user_info"]
 now = datetime.date.today()
 
-# 売上見込み表示
-st.markdown(f"""
-    <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 15px; border-radius: 15px; text-align: center; margin-bottom: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
-        <span style="color: #666; font-size: 0.8em; font-weight: bold;">今日の売上見込み ✨</span><br>
-        <span style="font-size: 1.8em; font-weight: bold; color: #333;">¥ 28,500</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-# 📅 カレンダーヘッダーと【同期ボタン】の配置
-header_col1, header_col2 = st.columns([0.7, 0.3])
-with header_col1:
-    st.subheader("📅 予定")
-with header_col2:
-    st.markdown('<div class="sync-btn">', unsafe_allow_html=True)
+# 同期ボタン（メイン画面に配置）
+col_t1, col_t2 = st.columns([0.7, 0.3])
+with col_t1:
+    st.subheader("📅 スケジュール")
+with col_t2:
     if st.button("🔄 同期"):
         with st.spinner("同期中"):
             cnt = sync_my_personal_shift(user['login_id'], user['hp_display_name'], user['home_shop_id'])
-            st.toast(f"{cnt}件のシフトを更新しました！", icon="✨")
+            st.toast(f"{cnt}件の予定を更新！", icon="✨")
             time.sleep(1)
             st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
 
 # カレンダー表示
 year, month = now.year, now.month
 cal = calendar.monthcalendar(year, month)
 
-# シフト情報取得
-shift_res = conn.table("shifts").select("date, shift_time").eq("cast_id", user['login_id']).execute()
-shift_dict = {s['date']: s['shift_time'] for s in shift_res.data}
+# DBからシフト取得（エラー回避付）
+try:
+    shift_res = conn.table("shifts").select("date, shift_time").eq("cast_id", user['login_id']).execute()
+    shift_dict = {s['date']: s['shift_time'] for s in shift_res.data}
+except:
+    shift_dict = {}
 
-# 曜日ラベル
+# 曜日ヘッダー
 cols_h = st.columns(7)
 for i, wd in enumerate(["月","火","水","木","金","土","日"]):
     color = "#FF3B30" if i==6 else "#007AFF" if i==5 else "#999"
     cols_h[i].markdown(f"<div style='text-align:center; font-size:0.7em; color:{color};'>{wd}</div>", unsafe_allow_html=True)
 
-# カレンダー日付ボタン
+# 日付選択の初期化
 if "selected_date" not in st.session_state:
     st.session_state.selected_date = now.isoformat()
 
+# カレンダーボタン
 for week in cal:
     cols = st.columns(7)
     for i, day in enumerate(week):
         if day != 0:
-            cell_date = datetime.date(year, month, day)
-            date_str = cell_date.isoformat()
-            is_shift = date_str in shift_dict
+            d_obj = datetime.date(year, month, day)
+            d_str = d_obj.isoformat()
+            is_shift = d_str in shift_dict
             
-            # デザイン判定
-            is_selected = (st.session_state.selected_date == date_str)
-            label = f"{day}\n●" if is_shift else str(day)
+            # クラス付与
+            btn_class = "has-shift" if is_shift else ""
+            if d_obj == now: btn_class += " today-cell"
             
-            if cols[i].button(label, key=f"d_{date_str}", use_container_width=True):
-                st.session_state.selected_date = date_str
+            # ラベル
+            label = f"**{day}**\n●" if is_shift else str(day)
+            
+            st.markdown(f'<div class="{btn_class}">', unsafe_allow_html=True)
+            if cols[i].button(label, key=f"btn_{d_str}", use_container_width=True):
+                st.session_state.selected_date = d_str
                 st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
         else:
             cols[i].write("")
 
-# スケジュール詳細
+# --- 5. 詳細エリア ---
 st.divider()
 sel_date = datetime.date.fromisoformat(st.session_state.selected_date)
-st.markdown(f"### 📝 {sel_date.month}月{sel_date.day}日の詳細")
+st.markdown(f"### 📝 {sel_date.month}/{sel_date.day} の予定")
 
 with st.container(border=True):
     if st.session_state.selected_date in shift_dict:
-        st.success(f"✅ 出勤：{shift_dict[st.session_state.selected_date]}")
-        st.write("🏢 池袋西口店")
+        st.success(f"⏰ 出勤時間: {shift_dict[st.session_state.selected_date]}")
+        st.write("🏢 勤務店舗: 池袋西口店")
     else:
-        st.info("この日の出勤予定はありません")
+        st.info("出勤予定はありません")
