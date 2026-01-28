@@ -120,4 +120,54 @@ st.markdown(f"""
 col_t, col_s = st.columns([6, 4])
 with col_t: st.subheader("📅 スケジュール")
 with col_s:
-    if st.button("🔄 同期", use_container_
+    if st.button("🔄 同期", use_container_width=True):
+        sync_individual_shift(user)
+        st.rerun()
+
+# --- 6. 🗓️ カレンダー描画 (リロードなし・7列固定) ---
+try:
+    shift_res = conn.table("shifts").select("date, shift_time").eq("cast_id", user['login_id']).execute()
+    shift_map = {s['date']: s['shift_time'] for s in shift_res.data}
+except: shift_map = {}
+
+now = datetime.date.today()
+cal = calendar.monthcalendar(now.year, now.month)
+wd_names = ["月", "火", "水", "木", "金", "土", "日"]
+
+# 曜日ヘッダー
+w_cols = st.columns(7)
+for i, wd in enumerate(wd_names):
+    c = "#007AFF" if i==5 else "#FF3B30" if i==6 else "#999"
+    w_cols[i].markdown(f"<div style='text-align:center; font-size:10px; color:{c};'>{wd}</div>", unsafe_allow_html=True)
+
+# 日付グリッド
+for week in cal:
+    d_cols = st.columns(7)
+    for i, day in enumerate(week):
+        if day != 0:
+            cell_date = datetime.date(now.year, now.month, day)
+            date_iso = cell_date.isoformat()
+            label = str(day)
+            if date_iso in shift_map: label += " ●"
+            
+            # st.buttonを使うことで、URLを変えずに状態だけを更新
+            if d_cols[i].button(label, key=f"d_{date_iso}", use_container_width=True):
+                st.session_state["selected_date"] = cell_date
+                st.rerun()
+
+# --- 7. 🕒 詳細表示 ---
+selected_date = st.session_state["selected_date"]
+st.markdown(f"#### {selected_date.month}/{selected_date.day} ({wd_names[selected_date.weekday()]}) の詳細")
+
+with st.container(border=True):
+    date_key = selected_date.isoformat()
+    if date_key in shift_map:
+        st.info(f"🕒 シフト時間：{shift_map[date_key]}")
+    else:
+        st.write("予定なし")
+
+with st.sidebar:
+    st.write(f"👤 {user['hp_display_name']} さん")
+    if st.button("ログアウト"):
+        st.session_state.clear()
+        st.rerun()
