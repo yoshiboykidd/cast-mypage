@@ -23,11 +23,12 @@ try:
 except ImportError:
     jpholiday = None
 
-# --- 2. 🛰️ 進化した同期ロジック（個別オートシンク + 時間解析） ---
+# --- 2. 🛰️ 最強の同期ロジック（個別オートシンク + 時間解析 + 自動削除） ---
 
 def sync_individual_shift(user_info):
     """
-    ログイン中のキャスト本人のシフトと「時間」をHPから取得しDBに保存する [cite: 2026-01-28]
+    1. HPに名前がある場合：最新の「時間」を解析してDB保存 [cite: 2026-01-28]
+    2. HPに名前がない場合：その日のシフトをDBから削除（休み反映） [cite: 2026-01-28]
     """
     hp_name = user_info.get('hp_display_name')
     if not hp_name:
@@ -37,14 +38,15 @@ def sync_individual_shift(user_info):
     base_url = "https://ikekari.com/attend.php"
     found_count = 0
     
-    # 時間を抽出するための正規表現 (19:00〜24:00 や 20:00〜LAST に対応) [cite: 2026-01-28]
-    time_pattern = r"(\d{1,2}:\d{2})\s*[-～〜]\s*(\d{1,2}:\d{2}|LAST|last|ラスト)"
+    # 時間解析用正規表現 [cite: 2026-01-28]
+    time_pattern = r"(\d{1,2}[:時]\d{0,2})\s*[-～〜]\s*(\d{1,2}[:時]\d{0,2}|LAST|last|ラスト|翌\d{1,2}[:時]\d{0,2})"
     
     status_placeholder = st.empty()
     
     for i in range(7):
         target_date = datetime.date.today() + datetime.timedelta(days=i)
-        status_placeholder.caption(f"🔍 {target_date} のシフトを確認中...")
+        date_iso = target_date.isoformat()
+        status_placeholder.caption(f"🔄 {target_date} の状況を確認中...")
         
         target_url = f"{base_url}?date_get={target_date.strftime('%Y/%m/%d')}"
         try:
@@ -52,31 +54,36 @@ def sync_individual_shift(user_info):
             res.encoding = 'utf-8'
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            # 名前が含まれる要素を特定 [cite: 2026-01-28]
+            # 名前を探す [cite: 2026-01-28]
             target_element = soup.find(string=re.compile(hp_name))
             
             if target_element:
-                # 名前の周辺テキストから時間を探す [cite: 2026-01-28]
-                container_text = target_element.find_parent().get_text()
+                # 【出勤時】名前の周辺から時間を解析 [cite: 2026-01-28]
+                container = target_element.find_parent().find_parent()
+                container_text = container.get_text(strip=True)
                 time_match = re.search(time_pattern, container_text)
                 shift_time = time_match.group(0) if time_match else "時間未定"
                 
-                # DBに時間も含めて保存 [cite: 2026-01-28]
+                # DB保存 [cite: 2026-01-28]
                 conn.table("shifts").upsert({
-                    "date": target_date.isoformat(),
+                    "date": date_iso,
                     "cast_id": user_info['login_id'],
                     "shop_id": user_info['home_shop_id'],
                     "status": "確定",
                     "shift_time": shift_time
                 }).execute()
                 found_count += 1
+            else:
+                # 【重要：休み時】HPに名前がなければDBから削除 [cite: 2026-01-28]
+                conn.table("shifts").delete().eq("date", date_iso).eq("cast_id", user_info['login_id']).execute()
+                
         except Exception as e:
-            st.error(f"解析エラー ({target_date}): {e}")
+            st.error(f"同期エラー ({target_date}): {e}")
         
-        time.sleep(0.2)
+        time.sleep(0.3)
     
     status_placeholder.empty()
-    return f"{found_count}件のシフトを同期しました✨", found_count
+    return f"最新の状況を同期しました✨", found_count
 
 # --- 3. 🔐 ログイン認証 ---
 if "password_correct" not in st.session_state:
@@ -90,20 +97,20 @@ if "password_correct" not in st.session_state:
             st.session_state["user_info"] = user_res.data[0]
             st.session_state["password_correct"] = True
             
-            # --- 🚀 ログイン直後のオートシンク実行 [cite: 2026-01-28] ---
-            with st.spinner("最新のシフトを同期中..."):
+            # ログイン時オートシンク
+            with st.spinner("最新のスケジュールを確認中..."):
                 sync_individual_shift(st.session_state["user_info"])
             
             st.rerun()
         else:
-            st.error("IDまたはパスワードが違います")
+            st.error("認証失敗。IDまたはパスワードが違います")
     st.stop()
 
 user = st.session_state["user_info"]
 
 # --- 4. メインUI ---
 
-# キラキラ売上ヘッダー [cite: 2026-01-28]
+# キラキラヘッダー [cite: 2026-01-28]
 st.markdown(f"""
     <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 20px; border-radius: 20px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-bottom: 25px;">
         <span style="color: #666; font-size: 0.9em; font-weight: bold;">今日の売上 (見込み) ✨</span><br>
@@ -111,7 +118,7 @@ st.markdown(f"""
     </div>
     """, unsafe_allow_html=True)
 
-# カレンダーヘッダーと共通同期ボタン [cite: 2026-01-28]
+# 同期ボタン [cite: 2026-01-28]
 col_t, col_s = st.columns([6, 4])
 with col_t:
     st.subheader("📅 スケジュール")
@@ -122,12 +129,10 @@ with col_s:
         time.sleep(1)
         st.rerun()
 
-# --- 5. 🗓️ カレンダー描画（HTML Table方式 / スマホ対応） ---
+# --- 5. 🗓️ カレンダー描画（スマホ対応HTML Table） ---
 
-# DBから最新シフト情報を取得 [cite: 2026-01-28]
 try:
     shift_res = conn.table("shifts").select("date, shift_time").eq("cast_id", user['login_id']).execute()
-    # 日付をキーにした辞書を作成 { '2026-01-28': '19:00〜24:00', ... }
     shift_map = {s['date']: s['shift_time'] for s in shift_res.data}
 except:
     shift_map = {}
@@ -135,7 +140,7 @@ except:
 now = datetime.date.today()
 cal = calendar.monthcalendar(now.year, now.month)
 
-# プロ仕様CSS [cite: 2026-01-28]
+# スタイル [cite: 2026-01-28]
 st.markdown("""
 <style>
     .calendar-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 15px; }
@@ -182,7 +187,7 @@ for week in cal:
 cal_html += "</table>"
 st.markdown(cal_html, unsafe_allow_html=True)
 
-# --- 6. 🕒 今日のスケジュール詳細表示 [cite: 2026-01-28] ---
+# --- 6. 🕒 今日の詳細 ---
 st.markdown("### 今日のスケジュール 🗓️")
 with st.container(border=True):
     today_str = now.isoformat()
