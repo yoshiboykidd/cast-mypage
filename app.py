@@ -7,10 +7,10 @@ from bs4 import BeautifulSoup
 import time
 import re
 
-# --- 1. ページ設定とセッション永続化 (最上部) ---
-st.set_page_config(page_title="かりんとポータル ver 6.00", layout="centered")
+# --- 1. [CRITICAL] ページ設定 ---
+st.set_page_config(page_title="かりんとポータル ver 7.00", layout="centered")
 
-# セッションがリセットされないよう、URLを一切変えない設計 [cite: 2026-01-28]
+# --- 2. 🔐 セッション永続化ガード (URLを一切変えない) ---
 if "password_correct" not in st.session_state:
     st.session_state["password_correct"] = False
 if "selected_date" not in st.session_state:
@@ -24,7 +24,7 @@ try:
 except:
     st.stop()
 
-# --- 2. 🛰️ 同期ロジック ---
+# --- 3. 🛰️ 同期ロジック ---
 def sync_individual_shift(user_info):
     hp_name = user_info.get('hp_display_name')
     if not hp_name: return
@@ -32,11 +32,9 @@ def sync_individual_shift(user_info):
     base_url = "https://ikekari.com/attend.php"
     time_pattern = r"(\d{1,2}[:時]\d{0,2})\s*[-～〜]\s*(\d{1,2}[:時]\d{0,2}|LAST|last|ラスト|翌\d{1,2}[:時]\d{0,2})"
     
-    status_bar = st.empty()
     for i in range(7):
         target_date = datetime.date.today() + datetime.timedelta(days=i)
         date_iso = target_date.isoformat()
-        status_bar.caption(f"🔄 {target_date.month}/{target_date.day} を同期中...")
         try:
             res = requests.get(f"{base_url}?date_get={target_date.strftime('%Y/%m/%d')}", headers=headers, timeout=10)
             res.encoding = 'utf-8'
@@ -54,12 +52,11 @@ def sync_individual_shift(user_info):
                 conn.table("shifts").delete().eq("date", date_iso).eq("cast_id", user_info['login_id']).execute()
         except: pass
         time.sleep(0.05)
-    status_bar.empty()
     return True
 
-# --- 3. 🔑 ログイン画面 ---
+# --- 4. 🔑 ログイン画面 ---
 if not st.session_state["password_correct"]:
-    st.title("🔐 ログイン (ver 6.00)")
+    st.title("🔐 ログイン (ver 7.00)")
     input_id = st.text_input("ログインID (8桁)")
     input_pw = st.text_input("パスワード", type="password")
     if st.button("ログイン"):
@@ -70,29 +67,29 @@ if not st.session_state["password_correct"]:
             sync_individual_shift(st.session_state["user_info"])
             st.rerun()
         else:
-            st.error("IDまたはパスワードが正しくありません。")
+            st.error("IDまたはPWが違います")
     st.stop()
 
 user = st.session_state["user_info"]
 
-# --- 4. 📐 [重要] 崩れとログアウトを阻止するCSS ---
+# --- 5. 🎨 [FINAL HACK] 崩れとログアウトを物理的に阻止するCSS ---
 st.markdown("""
 <style>
-    /* 1. スマホでの自動折り返しを強制禁止 */
-    [data-testid="stHorizontalBlock"] {
+    /* 1. スマホの自動折り返しを禁止し、隙間を完全にゼロにする */
+    div[data-testid="stHorizontalBlock"] {
         display: flex !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
         gap: 0px !important;
     }
-    /* 2. カラム幅を7等分に固定 */
-    [data-testid="column"] {
+    /* 2. 各カラムの幅を14.28%に強制固定 */
+    div[data-testid="column"] {
         flex: 1 1 0% !important;
         min-width: 0 !important;
         width: 14.28% !important;
-        padding: 1px !important;
+        padding: 0.5px !important; /* 隣との僅かな隙間 */
     }
-    /* 3. ボタンをカレンダー風に最適化 */
+    /* 3. ボタンを正方形に近い形に固定し、文字はみ出しを防止 */
     div.stButton > button {
         border: 1px solid #f0f0f0 !important;
         background-color: white !important;
@@ -100,21 +97,28 @@ st.markdown("""
         width: 100% !important;
         padding: 0 !important;
         font-size: 11px !important;
-        font-weight: 800 !important;
-        line-height: 1.2 !important;
+        border-radius: 4px !important;
+    }
+    /* 4. 出勤日の色付け（ピンク背景） */
+    .shift-day button {
+        background-color: #FFF5F7 !important;
+        color: #FF4B4B !important;
+        border-bottom: 2px solid #FF4B4B !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 5. メインUI ---
+# --- 6. メインUI ---
+# 売上ヘッダー
 sel_d = st.session_state["selected_date"]
 st.markdown(f"""
     <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 15px; border-radius: 12px; text-align: center; margin-bottom: 20px;">
-        <span style="color: #666; font-size: 0.8em; font-weight: bold;">{sel_d.month}/{sel_d.day} の見込み売上 ✨</span><br>
+        <span style="color: #666; font-size: 0.8em; font-weight: bold;">{sel_d.month}/{sel_d.day} の売上見込み ✨</span><br>
         <span style="font-size: 1.6em; font-weight: bold; color: #333;">¥ 28,500</span>
     </div>
     """, unsafe_allow_html=True)
 
+# 同期ボタン
 col_t, col_s = st.columns([6, 4])
 with col_t: st.subheader("📅 スケジュール")
 with col_s:
@@ -122,7 +126,7 @@ with col_s:
         sync_individual_shift(user)
         st.rerun()
 
-# --- 6. 🗓️ カレンダー描画 ---
+# --- 7. 🗓️ カレンダー描画 (リロードなし・7列固定) ---
 try:
     shift_res = conn.table("shifts").select("date, shift_time").eq("cast_id", user['login_id']).execute()
     shift_map = {s['date']: s['shift_time'] for s in shift_res.data}
@@ -132,26 +136,30 @@ now = datetime.date.today()
 cal = calendar.monthcalendar(now.year, now.month)
 wd_names = ["月", "火", "水", "木", "金", "土", "日"]
 
-w_cols = st.columns(7)
+# 曜日ヘッダー
+w_cols = st.columns(7, gap="none")
 for i, wd in enumerate(wd_names):
     c = "#007AFF" if i==5 else "#FF3B30" if i==6 else "#999"
     w_cols[i].markdown(f"<div style='text-align:center; font-size:10px; color:{c};'>{wd}</div>", unsafe_allow_html=True)
 
-# st.buttonを使用することで、URLを維持したまま状態を更新 [cite: 2026-01-28]
+# 日付グリッド (st.buttonを使用)
 for week in cal:
-    d_cols = st.columns(7)
+    d_cols = st.columns(7, gap="none")
     for i, day in enumerate(week):
         if day != 0:
             cell_date = datetime.date(now.year, now.month, day)
             date_iso = cell_date.isoformat()
             label = str(day)
-            if date_iso in shift_map: label += "\n●"
             
+            # 出勤なら点をつける
+            if date_iso in shift_map: label += " ●"
+            
+            # 【重要】ボタンで状態を更新する。URLが変わらないのでログアウトしない
             if d_cols[i].button(label, key=f"d_{date_iso}", use_container_width=True):
                 st.session_state["selected_date"] = cell_date
                 st.rerun()
 
-# --- 7. 🕒 詳細表示 ---
+# --- 8. 🕒 詳細表示 ---
 selected_date = st.session_state["selected_date"]
 st.markdown(f"#### {selected_date.month}/{selected_date.day} ({wd_names[selected_date.weekday()]}) の詳細")
 
@@ -160,7 +168,7 @@ with st.container(border=True):
     if date_key in shift_map:
         st.info(f"🕒 シフト時間：{shift_map[date_key]}")
     else:
-        st.write("お休み、または未定です。")
+        st.write("予定なし")
 
 with st.sidebar:
     st.write(f"👤 {user['hp_display_name']} さん")
