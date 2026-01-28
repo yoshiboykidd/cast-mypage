@@ -7,8 +7,8 @@ from bs4 import BeautifulSoup
 import time
 import re
 
-# --- 1. ページ設定 (最上部) ---
-st.set_page_config(page_title="かりんとポータル ver 3.10", page_icon="💖", layout="centered")
+# --- 1. [CRITICAL] ページ設定 ---
+st.set_page_config(page_title="かりんとポータル ver 3.20", page_icon="💖", layout="centered")
 
 # --- 2. 🔐 セッション永続化ガード ---
 if "password_correct" not in st.session_state:
@@ -20,10 +20,10 @@ if "selected_date" not in st.session_state:
 try:
     conn = st.connection("supabase", type=SupabaseConnection)
 except:
-    st.error("DB接続エラー。")
+    st.error("DB接続エラー。Secretsを確認してください。")
     st.stop()
 
-# --- 3. 🛰️ 同期ロジック (時間解析・自動削除) ---
+# --- 3. 🛰️ 同期ロジック ---
 def sync_individual_shift(user_info):
     hp_name = user_info.get('hp_display_name')
     if not hp_name: return "HP名未設定", 0
@@ -57,7 +57,7 @@ def sync_individual_shift(user_info):
 
 # --- 4. 🔑 ログイン画面 ---
 if not st.session_state["password_correct"]:
-    st.title("🔐 ログイン (ver 3.10)")
+    st.title("🔐 ログイン (ver 3.20)")
     input_id = st.text_input("ログインID (8桁)")
     input_pw = st.text_input("パスワード", type="password")
     if st.button("ログイン"):
@@ -74,7 +74,7 @@ if not st.session_state["password_correct"]:
 user = st.session_state["user_info"]
 
 # --- 5. メインUI ---
-st.title(f"かりんとポータル ver 3.10")
+st.title(f"かりんとポータル ver 3.20")
 
 # キラキラヘッダー
 sel_d = st.session_state["selected_date"]
@@ -85,7 +85,7 @@ st.markdown(f"""
     </div>
     """, unsafe_allow_html=True)
 
-# 同期ボタン
+# ヘッダーと同期
 col_t, col_s = st.columns([6, 4])
 with col_t: st.subheader("📅 スケジュール")
 with col_s:
@@ -93,23 +93,33 @@ with col_s:
         sync_individual_shift(user)
         st.rerun()
 
-# --- 6. 🗓️ カレンダー描画 (絶対にログアウトしないボタン方式) ---
+# --- 6. 🗓️ カレンダー描画 (スマホ7列固定CSS) ---
 st.markdown("""
 <style>
-    /* ボタンをカレンダーのマス目に見せるための超絶CSS [cite: 2026-01-28] */
+    /* スマホで縦並びになるのを防ぐ魔法のCSS [cite: 2026-01-28] */
+    [data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        gap: 2px !important;
+    }
+    [data-testid="column"] {
+        width: 14.2% !important; /* 100/7 */
+        flex: 1 1 0% !important;
+        min-width: 0 !important;
+    }
+    /* ボタンのデザインをカレンダー風に [cite: 2026-01-28] */
     div.stButton > button {
         border: 1px solid #f0f0f0 !important;
         background-color: white !important;
-        color: #444 !important;
-        height: 60px !important;
+        height: 50px !important;
         width: 100% !important;
         padding: 0 !important;
         border-radius: 5px !important;
-        font-weight: 800 !important;
+        font-size: 0.8em !important;
     }
-    div.stButton > button:hover { border-color: #FF4B4B !important; color: #FF4B4B !important; }
-    /* 土日と選択中のスタイル */
-    .st-emotion-cache-18ni77z { gap: 0.2rem !important; } /* カラム間の隙間 */
+    /* 今日や選択中の強調 */
+    .has-shift-btn { background-color: #FFF5F7 !important; border-bottom: 3px solid #FF4B4B !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -122,34 +132,35 @@ now = datetime.date.today()
 cal = calendar.monthcalendar(now.year, now.month)
 week_days = ["月", "火", "水", "木", "金", "土", "日"]
 
-# 曜日ヘッダー
-cols = st.columns(7)
+# 曜日
+w_cols = st.columns(7)
 for i, wd in enumerate(week_days):
     color = "#007AFF" if i==5 else "#FF3B30" if i==6 else "#999"
-    cols[i].markdown(f"<div style='text-align:center; font-size:0.7em; color:{color};'>{wd}</div>", unsafe_allow_html=True)
+    w_cols[i].markdown(f"<div style='text-align:center; font-size:0.7em; color:{color};'>{wd}</div>", unsafe_allow_html=True)
 
-# 日付グリッド (ボタン化) [cite: 2026-01-28]
+# 日付
 for week in cal:
-    cols = st.columns(7)
+    d_cols = st.columns(7)
     for i, day in enumerate(week):
         if day != 0:
             cell_date = datetime.date(now.year, now.month, day)
             date_iso = cell_date.isoformat()
             
-            # ラベルの作成（出勤なら点をつける）
-            label = str(day)
-            if date_iso in shift_map:
-                label += "\n●" # シフトありの印
+            # 出勤日の場合は名前に「●」をつける
+            label = f"{day}"
+            if date_iso in shift_map: label += "\n●"
             
-            # 【重要】これが「絶対にログアウトしない」日付選択ボタン
-            if cols[i].button(label, key=f"btn_{date_iso}", use_container_width=True):
+            # 日曜・土曜の色
+            if i == 6: label = f"🔴{day}"
+            elif i == 5: label = f"🔵{day}"
+
+            if d_cols[i].button(label, key=f"d_{date_iso}", use_container_width=True):
                 st.session_state["selected_date"] = cell_date
                 st.rerun()
 
 # --- 7. 🕒 詳細表示 ---
 selected_date = st.session_state["selected_date"]
-wd_list = ["月", "火", "水", "木", "金", "土", "日"]
-st.markdown(f"### {selected_date.month}/{selected_date.day}({wd_list[selected_date.weekday()]}) の予定")
+st.markdown(f"### {selected_date.month}/{selected_date.day} の予定")
 
 with st.container(border=True):
     date_key = selected_date.isoformat()
