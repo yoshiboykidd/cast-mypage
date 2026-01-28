@@ -5,7 +5,6 @@ import calendar
 import requests
 from bs4 import BeautifulSoup
 import time
-import re
 
 # --- 1. ページ基本設定 ---
 st.set_page_config(page_title="かりんとポータル", page_icon="💖", layout="centered")
@@ -16,16 +15,23 @@ try:
 except ImportError:
     jpholiday = None
 
-# --- 2. 🛰 巡回スクレイピング関数（正確な日付紐付け版） ---
+# --- 2. 🛰 巡回スクレイピング関数（自動クリーンアップ付き） ---
 
 def scrape_multi_day_shifts():
-    """HPから今後1週間のシフトを取得し、正確な日付でDB保存する"""
+    """HPから今後1週間のシフトを取得。実行前に古いデータを削除してリフレッシュする"""
     try:
+        # DBからマッピング用名簿を取得
         casts = conn.table("cast_members").select("login_id, hp_display_name, home_shop_id").execute()
         name_map = {c['hp_display_name']: (c['login_id'], c['home_shop_id']) for c in casts.data if c['hp_display_name']}
         
         if not name_map:
-            return "名簿同期を行ってください。", 0
+            return ["先に名簿同期を行ってください。"], 0
+
+        # 💡 【重要】リフレッシュ処理：今日から7日間分の既存データを一旦削除する
+        # これにより「過去の間違ったデータ」や「休みになった日」が消えます
+        today = datetime.date.today()
+        end_date = today + datetime.timedelta(days=7)
+        conn.table("shifts").delete().gte("date", today.isoformat()).lte("date", end_date.isoformat()).execute()
 
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         base_url = "https://ikekari.com/attend.php"
@@ -33,9 +39,9 @@ def scrape_multi_day_shifts():
         total_found = 0
         
         for i in range(7):
-            target_date = datetime.date.today() + datetime.timedelta(days=i)
+            target_date = today + datetime.timedelta(days=i)
             url_date_str = target_date.strftime("%Y/%m/%d")
-            db_date_str = target_date.isoformat() # DBには '2026-01-28' 形式で保存
+            db_date_str = target_date.isoformat()
             
             target_url = f"{base_url}?date_get={url_date_str}"
             res = requests.get(target_url, headers=headers, timeout=10)
@@ -46,8 +52,9 @@ def scrape_multi_day_shifts():
             found_names_today = []
             for hp_name, (c_id, s_id) in name_map.items():
                 if hp_name in page_text:
-                    conn.table("shifts").upsert({
-                        "date": db_date_str, # 正確な日付で保存
+                    # 最新の出勤情報のみを書き込む
+                    conn.table("shifts").insert({
+                        "date": db_date_str,
                         "cast_id": c_id,
                         "shop_id": s_id,
                         "status": "確定"
@@ -62,7 +69,7 @@ def scrape_multi_day_shifts():
     except Exception as e:
         return [f"エラー: {e}"], 0
 
-# --- 3. 🔐 ログイン認証 ---
+# --- 3. 🔐 ログイン認証（省略不可） ---
 if "password_correct" not in st.session_state:
     st.title("🔐 ログイン")
     input_id = st.text_input("ログインID (8桁)")
@@ -85,41 +92,37 @@ with st.sidebar:
     admin_key = st.text_input("Admin Key", type="password")
     if admin_key == "karin10":
         if st.button("2. 1週間分のシフトを一括取得 🌐"):
-            with st.spinner("一括取得中..."):
+            with st.spinner("古いデータを消去して再取得中..."):
                 logs, count = scrape_multi_day_shifts()
                 for log in logs: st.caption(log)
-                st.success(f"合計 {count} 件更新！")
+                st.success(f"リフレッシュ完了！ 合計 {count} 件")
     if st.button("ログアウト"):
         st.session_state.clear()
         st.rerun()
 
-# --- 5. UI（キラキラデザイン再現） ---
+# --- 5. UI（キラキラデザイン・カレンダー表示） ---
 st.markdown(f"""
     <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 20px; border-radius: 20px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-bottom: 25px;">
-        <span style="color: #666; font-size: 0.9em; font-weight: bold;">今日の売上 (見込み) ✨</span><br>
         <span style="font-size: 2em; font-weight: bold; color: #333;">¥ 28,500 GET!</span>
     </div>
     """, unsafe_allow_html=True)
 
-# --- 🗓️ カレンダー描画ロジック（修正の核心） ---
 st.subheader("📅 スケジュール")
 now = datetime.date.today()
 year, month = now.year, now.month
 cal = calendar.monthcalendar(year, month)
 
-# DBから本人の全シフトを「日付文字列」のリストとして取得
+# DBから「年・月」を問わず本人のシフトを正確に取得
 try:
     shift_res = conn.table("shifts").select("date").eq("cast_id", user['login_id']).execute()
-    # shift_date_list = ['2026-01-28', '2026-01-29', ...]
     shift_date_list = [s['date'] for s in shift_res.data]
 except:
     shift_date_list = []
 
-# CSS設定
 cal_style = """
 <style>
     .calendar-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 20px; }
-    .calendar-table td { vertical-align: top; height: 50px; border: 1px solid #f8f8f8; background-color: white; position: relative; padding: 4px; border-radius: 8px; }
+    .calendar-table td { vertical-align: top; height: 50px; border: 1px solid #fdfdfd; background-color: white; position: relative; padding: 4px; border-radius: 8px; }
     .day-num { font-size: 0.7em; font-weight: 800; position: absolute; top: 4px; left: 6px; }
     .sat { color: #007AFF; } .sun-hol { color: #FF3B30; } .weekday { color: #444; }
     .has-shift { background-color: #FFF5F7 !important; }
@@ -140,33 +143,17 @@ for week in cal:
         if day == 0:
             cal_html += "<td></td>"
         else:
-            # 💡 ここで「そのマスの日付」を正確に生成
             cell_date = datetime.date(year, month, day)
-            cell_date_str = cell_date.isoformat() # '2026-01-28'
-            
-            # 祝日・色判定
+            cell_date_str = cell_date.isoformat()
             is_hol = jpholiday.is_holiday(cell_date) if jpholiday else False
             d_color = "sat" if i==5 else "sun-hol" if i==6 or is_hol else "weekday"
             
-            # シフトがあるかどうかの判定（日付文字列で完全一致チェック）
             is_shift_day = cell_date_str in shift_date_list
+            td_class = ["today-cell"] if cell_date == now else []
+            if is_shift_day: td_class.append("has-shift")
             
-            td_classes = []
-            if cell_date == now: td_classes.append("today-cell")
-            if is_shift_day: td_classes.append("has-shift")
-            
-            td_class_str = f'class="{" ".join(td_classes)}"' if td_classes else ""
             bar = '<div class="shift-bar"></div>' if is_shift_day else ''
-            
-            cal_html += f'<td {td_class_str}><span class="day-num {d_color}">{day}</span>{bar}</td>'
+            cal_html += f'<td class="{" ".join(td_class)}"><span class="day-num {d_color}">{day}</span>{bar}</td>'
     cal_html += "</tr>"
 cal_html += "</table>"
 st.markdown(cal_html, unsafe_allow_html=True)
-
-# 予定詳細
-st.markdown("### 今日のスケジュール 🗓️")
-with st.container(border=True):
-    if now.isoformat() in shift_date_list:
-        st.info("🕒 シフト：19:00 - 24:00\n\n📌 予約：1件 (20:30〜)")
-    else:
-        st.write("本日の予定はありません。ゆっくり休んでくださいね。")
