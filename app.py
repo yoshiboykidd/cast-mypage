@@ -1,120 +1,81 @@
 import streamlit as st
 from st_supabase_connection import SupabaseConnection
 import datetime
+import calendar
 
 # --- 1. ページ基本設定 ---
 st.set_page_config(page_title="かりんとポータル", page_icon="💖", layout="centered")
-
-# --- 2. データベース接続 ---
 conn = st.connection("supabase", type=SupabaseConnection)
 
-# --- 3. 管理用：データ同期関数（枠組みのみ） ---
-def sync_all_data():
-    return 0, 0 # UI確認用のため処理はスキップ
+# --- 2. 🔐 ログイン認証（簡易版） ---
+if "password_correct" not in st.session_state:
+    st.title("🔐 ログイン")
+    # 実際はここでDB照合
+    if st.button("テストログイン"):
+        st.session_state["password_correct"] = True
+        st.session_state["user_info"] = {"display_name": "ユキちゃん", "login_id": "00100001"}
+        st.rerun()
+    st.stop()
 
-# --- 4. 🔐 ログイン認証（UI確認用：常にTrueにするか、既存ロジックを維持） ---
-def check_password():
-    # テストをスムーズにするため、一度ログインしたらセッションを維持
-    if "password_correct" not in st.session_state:
-        st.title("🔐 ログイン")
-        st.caption("テスト用：ID/PWは何でもログイン可能です（UI確認用）")
-        st.text_input("ログインID", key="login_id")
-        st.text_input("パスワード", type="password", key="password_input")
-        if st.button("ログイン"):
-            st.session_state["password_correct"] = True
-            # ダミーのユーザー情報
-            st.session_state["user_info"] = {
-                "display_name": "テスト キャスト",
-                "home_shop_id": "001",
-                "login_id": "00100001"
-            }
-            st.rerun()
-        return False
-    return True
+# --- 3. メイン画面の構築（画像のデザインを反映） ---
+user = st.session_state["user_info"]
 
-# --- 5. サイドバー ---
+# --- A. ヘッダーエリア ---
+col_head1, col_head2 = st.columns([4, 1])
+col_head1.title(f"✨ {user['display_name']} さん")
+col_head2.button("⚙️")
+
+# --- B. 今日の売上カード（見込み） ---
+with st.container(border=True):
+    st.write("今日の売上 (見込み) ✨")
+    st.markdown("<h1 style='text-align: center; color: #FF4B4B;'>¥ 28,500 GET!</h1>", unsafe_allow_html=True)
+    st.progress(0.65, text="今月の目標: 65%達成")
+
+st.divider()
+
+# --- C. 【新設】カレンダー表示エリア（スケジュールの「上」に配置） ---
+st.subheader("📅 カレンダー")
+# 月間カレンダーのデータ作成
+now = datetime.datetime.now()
+cal = calendar.monthcalendar(now.year, now.month)
+
+# 7列でカレンダーを表示
+rows = len(cal)
+for week in cal:
+    cols = st.columns(7)
+    for i, day in enumerate(week):
+        if day == 0:
+            cols[i].write("")
+        else:
+            # シフトがある日を想定してボタンを配置
+            # 将来的にシフトがある日は色を変えるなどの処理を追加
+            if cols[i].button(str(day), key=f"cal_{day}", use_container_width=True):
+                st.session_state["selected_date"] = day
+
+# --- D. 今日のスケジュール ---
+st.subheader("📝 スケジュール詳細")
+selected_day = st.session_state.get("selected_date", now.day)
+with st.container(border=True):
+    st.write(f"**{now.month}月{selected_day}日の予定**")
+    # ダミーデータ（本来はDBから取得）
+    st.info("⏰ シフト：19:00 - 24:00\n\n📌 予約：20:30〜 90分 (田中様)")
+
+# --- E. お知らせ・稼げるヒミツ ---
+st.divider()
+st.subheader("📢 お店からのお知らせ")
+with st.expander("重要：ドレスコードが変わります 👗"):
+    st.write("来月より衣装の規定が変更になります。詳細は...")
+
+with st.expander("明日のまかないはオムライスだよ 😋"):
+    st.write("楽しみにしていてね！")
+
+# --- 4. ナビゲーション（下部ボタンの代わり） ---
 with st.sidebar:
-    st.header("メニュー")
-    with st.expander("⚙️ 管理設定"):
-        st.text_input("Admin Key", type="password")
-        st.button("全データを同期 🔄")
-        st.button("HPからシフト取得 🌐")
-    
-    if st.session_state.get("password_correct"):
-        st.divider()
-        st.write(f"USER: {st.session_state['user_info']['display_name']}")
-        if st.button("ログアウト"):
-            st.session_state.clear()
-            st.rerun()
-
-# --- 6. メインコンテンツ ---
-if check_password():
-    user = st.session_state["user_info"]
-    
-    # 店舗マスターのダミー（DBがない場合用）
-    shop_options = {"001": "池袋西口店", "002": "赤坂店", "003": "五反田店"}
-    shop_ids = list(shop_options.keys())
-
-    # スマホで見やすい3タブ構造
-    tab_earn, tab_shift, tab_req = st.tabs(["実績報告", "シフト確認", "シフト申請"])
-
-    # --- タブA: 実績報告 ---
-    with tab_earn:
-        st.subheader("📝 本日の実績報告")
-        with st.form("earn_form"):
-            st.selectbox("勤務店舗", options=shop_ids, format_func=lambda x: f"{x}: {shop_options[x]}")
-            st.number_input("本日の給与 (円)", min_value=0, step=1000, value=15000)
-            st.date_input("稼働日", value=datetime.date.today())
-            st.text_area("メモ (任意)")
-            st.form_submit_button("報告を保存する ✨")
-
-        st.divider()
-        st.subheader("📊 直近の履歴")
-        # 履歴の見た目確認用サンプル
-        sample_history = [
-            {"date": "2026-01-27", "amount": 18000, "shop": "池袋西口店"},
-            {"date": "2026-01-26", "amount": 12000, "shop": "赤坂店"},
-        ]
-        st.table(sample_history)
-
-    # --- タブB: シフト確認（ダミーデータ表示） ---
-    with tab_shift:
-        st.subheader("📅 確定シフト")
-        st.caption("※以下は表示イメージです（実際のデータではありません）")
-        
-        # スマホで最も見やすい「カード型リスト」のフレームワーク
-        dummy_shifts = [
-            {"date": "2026-01-28", "shop": "池袋西口店", "time": "19:00 - LAST", "status": "確定"},
-            {"date": "2026-01-29", "shop": "赤坂店", "time": "20:00 - 05:00", "status": "確定"},
-            {"date": "2026-01-31", "shop": "五反田店", "time": "18:00 - LAST", "status": "確認中"},
-        ]
-
-        for s in dummy_shifts:
-            # 枠（Container）を使って1日分をひとまとめにする
-            with st.container(border=True):
-                col1, col2 = st.columns([1, 2])
-                
-                # 左側：日付を強調
-                d = datetime.datetime.strptime(s['date'], "%Y-%m-%d")
-                col1.markdown(f"### {d.day}")
-                col1.caption(f"{d.month}月")
-                
-                # 右側：詳細情報
-                col2.markdown(f"**🏢 {s['shop']}**")
-                col2.write(f"⏰ {s['time']}")
-                
-                # ステータスによって色を変えるなどの視認性向上
-                if s['status'] == "確定":
-                    col2.success(s['status'])
-                else:
-                    col2.warning(s['status'])
-
-    # --- タブC: シフト申請 ---
-    with tab_req:
-        st.subheader("📝 シフト希望の提出")
-        with st.form("req_form"):
-            st.date_input("出勤希望日")
-            st.selectbox("希望店舗", options=shop_ids, format_func=lambda x: f"{x}: {shop_options[x]}")
-            st.multiselect("希望時間", ["18:00〜", "19:00〜", "20:00〜", "LASTまで", "終電まで"])
-            st.text_area("備考・メッセージ")
-            st.form_submit_button("申請を送信 📤")
+    st.title("MENU")
+    if st.button("🏠 ホーム", use_container_width=True): pass
+    if st.button("📝 実績報告", use_container_width=True): pass
+    if st.button("📤 シフト申請", use_container_width=True): pass
+    st.divider()
+    if st.button("🚪 ログアウト", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
