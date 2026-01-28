@@ -7,35 +7,6 @@ import calendar
 st.set_page_config(page_title="かりんとポータル", page_icon="💖", layout="centered")
 conn = st.connection("supabase", type=SupabaseConnection)
 
-# --- ✨ スマホで7列を強制するCSS（重要） ---
-st.markdown("""
-    <style>
-    /* カラムの自動折り返しを禁止し、常に1/7の幅を維持する */
-    [data-testid="column"] {
-        width: calc(14.28% - 0.5rem) !important;
-        flex: 1 1 calc(14.28% - 0.5rem) !important;
-        min-width: calc(14.28% - 0.5rem) !important;
-    }
-    /* ボタンの余白を削ってカレンダーらしくする */
-    .stButton > button {
-        padding: 5px 0px !important;
-        font-size: 0.8rem !important;
-        border-radius: 5px !important;
-    }
-    /* 曜日ヘッダーのスタイル */
-    .dow-header {
-        text-align: center;
-        font-weight: bold;
-        font-size: 0.7rem;
-        color: #FF4B4B;
-    }
-    /* 今日のハイライト */
-    .today-marker {
-        border: 2px solid #FF4B4B !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
 # --- 2. 🔐 ログイン認証（プロトタイプ） ---
 if "password_correct" not in st.session_state:
     st.title("🔐 ログイン")
@@ -48,7 +19,7 @@ if "password_correct" not in st.session_state:
 # --- 3. メイン画面構築 ---
 user = st.session_state["user_info"]
 
-# A. 売上見込みエリア（画像のデザインを意識）
+# A. 売上見込みエリア（画像のデザインを反映）
 st.markdown("""
     <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 15px; border-radius: 15px; text-align: center; margin-bottom: 20px;">
         <span style="color: #666; font-size: 0.8em;">今日の売上 (見込み) ✨</span><br>
@@ -56,47 +27,81 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-# B. 【改善版】カレンダーエリア
+# B. 【改善版】絶対に崩れないカレンダー
 st.subheader("📅 カレンダー")
 
 now = datetime.datetime.now()
 year, month = now.year, now.month
 cal = calendar.monthcalendar(year, month)
 
-# 1. 曜日ヘッダー（ここが消えていたので追加）
-cols_dow = st.columns(7)
-weekdays = ["月", "火", "水", "木", "金", "土", "日"]
-for i, wd in enumerate(weekdays):
-    cols_dow[i].markdown(f"<div class='dow-header'>{wd}</div>", unsafe_allow_html=True)
+# HTMLでカレンダーを直接記述（これが一番確実です）
+cal_html = f"""
+<style>
+    .calendar-table {{
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed; /* これで列幅を均等に固定 */
+    }}
+    .calendar-table th {{
+        text-align: center;
+        font-size: 0.8em;
+        color: #FF4B4B;
+        padding: 5px 0;
+    }}
+    .calendar-table td {{
+        text-align: center;
+        padding: 8px 0;
+        border: 1px solid #eee;
+        font-size: 0.9em;
+        background-color: white;
+        border-radius: 5px;
+    }}
+    .today-cell {{
+        background-color: #FF4B4B !important;
+        color: white !important;
+        font-weight: bold;
+    }}
+</style>
+<table class="calendar-table">
+    <tr>
+        <th>月</th><th>火</th><th>水</th><th>木</th><th>金</th><th>土</th><th style="color:red;">日</th>
+    </tr>
+"""
 
-# 2. カレンダーの日付グリッド
-# どんなスマホでも強制的に7列で表示されます
 for week in cal:
-    cols = st.columns(7)
-    for i, day in enumerate(week):
+    cal_html += "<tr>"
+    for day in week:
         if day == 0:
-            cols[i].write("")
+            cal_html += "<td></td>"
         else:
-            # 今日の日付を特定
-            is_today = (day == now.day)
-            
-            # ボタンを配置（タップで詳細切り替え）
-            if cols[i].button(str(day), key=f"d_{day}", use_container_width=True):
-                st.session_state["selected_date"] = day
+            style_class = "today-cell" if day == now.day else ""
+            cal_html += f'<td class="{style_class}">{day}</td>'
+    cal_html += "</tr>"
+
+cal_html += "</table>"
+
+# HTMLを埋め込む
+st.markdown(cal_html, unsafe_allow_html=True)
 
 # C. 今日のスケジュール詳細
 st.divider()
-selected_day = st.session_state.get("selected_date", now.day)
-st.markdown(f"### 📝 {month}月{selected_day}日の予定")
+st.markdown(f"### 📝 本日の予定")
 
 with st.container(border=True):
-    # 将来的にここを Supabase の shifts テーブルから取得するようにする
+    # ここに将来 shifts テーブルのデータを表示する
     st.write("**⏰ シフト：19:00 - 24:00**")
     st.write("📌 予約：1件 (20:30〜)")
-    st.caption("※詳細は店舗掲示板を確認してください")
+    st.caption("店舗：池袋西口店")
 
 # D. お知らせエリア
 st.divider()
 st.subheader("📢 お知らせ")
 st.info("重要：ドレスコードが変更になります 👗")
 st.success("ユキちゃん「リピートNo.1」バッジおめでとう！ 🎊")
+
+# --- 4. サイドバーメニュー ---
+with st.sidebar:
+    st.title("Menu")
+    st.button("🏠 ホーム")
+    st.button("📝 実績報告")
+    st.button("📤 シフト申請")
