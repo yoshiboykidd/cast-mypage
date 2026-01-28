@@ -8,7 +8,7 @@ import time
 import re
 
 # --- 1. [CRITICAL] ページ設定 ---
-st.set_page_config(page_title="かりんとポータル ver 3.20", page_icon="💖", layout="centered")
+st.set_page_config(page_title="かりんとポータル ver 3.30", page_icon="💖", layout="centered")
 
 # --- 2. 🔐 セッション永続化ガード ---
 if "password_correct" not in st.session_state:
@@ -52,12 +52,12 @@ def sync_individual_shift(user_info):
             else:
                 conn.table("shifts").delete().eq("date", date_iso).eq("cast_id", user_info['login_id']).execute()
         except: pass
-        time.sleep(0.1)
+        time.sleep(0.05)
     return "同期完了", found_count
 
 # --- 4. 🔑 ログイン画面 ---
 if not st.session_state["password_correct"]:
-    st.title("🔐 ログイン (ver 3.20)")
+    st.title("🔐 ログイン (ver 3.30)")
     input_id = st.text_input("ログインID (8桁)")
     input_pw = st.text_input("パスワード", type="password")
     if st.button("ログイン"):
@@ -74,52 +74,50 @@ if not st.session_state["password_correct"]:
 user = st.session_state["user_info"]
 
 # --- 5. メインUI ---
-st.title(f"かりんとポータル ver 3.20")
+st.title(f"かりんとポータル ver 3.30")
 
 # キラキラヘッダー
 sel_d = st.session_state["selected_date"]
 st.markdown(f"""
-    <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 20px; border-radius: 20px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-bottom: 25px;">
-        <span style="color: #666; font-size: 0.9em; font-weight: bold;">{sel_d.month}/{sel_d.day} の売上見込み ✨</span><br>
-        <span style="font-size: 2em; font-weight: bold; color: #333;">¥ 28,500 GET!</span>
+    <div style="background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); padding: 15px; border-radius: 15px; text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 20px;">
+        <span style="color: #666; font-size: 0.8em; font-weight: bold;">{sel_d.month}/{sel_d.day} の売上見込み ✨</span><br>
+        <span style="font-size: 1.5em; font-weight: bold; color: #333;">¥ 28,500</span>
     </div>
     """, unsafe_allow_html=True)
 
-# ヘッダーと同期
+# 同期ボタン
 col_t, col_s = st.columns([6, 4])
 with col_t: st.subheader("📅 スケジュール")
 with col_s:
-    if st.button("🔄 同期する", use_container_width=True):
+    if st.button("🔄 同期", use_container_width=True):
         sync_individual_shift(user)
         st.rerun()
 
-# --- 6. 🗓️ カレンダー描画 (スマホ7列固定CSS) ---
+# --- 6. 🗓️ カレンダー描画 (超凝縮・横スクロール禁止版) ---
 st.markdown("""
 <style>
-    /* スマホで縦並びになるのを防ぐ魔法のCSS [cite: 2026-01-28] */
+    /* 1. カラムの余白を極限まで削る [cite: 2026-01-28] */
     [data-testid="stHorizontalBlock"] {
-        display: flex !important;
-        flex-direction: row !important;
-        flex-wrap: nowrap !important;
         gap: 2px !important;
     }
     [data-testid="column"] {
-        width: 14.2% !important; /* 100/7 */
-        flex: 1 1 0% !important;
-        min-width: 0 !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
     }
-    /* ボタンのデザインをカレンダー風に [cite: 2026-01-28] */
+    
+    /* 2. ボタンを画面幅に合わせて縮小させる [cite: 2026-01-28] */
     div.stButton > button {
-        border: 1px solid #f0f0f0 !important;
+        border: 1px solid #eee !important;
         background-color: white !important;
-        height: 50px !important;
+        height: 45px !important;
         width: 100% !important;
         padding: 0 !important;
-        border-radius: 5px !important;
-        font-size: 0.8em !important;
+        font-size: 3.5vw !important; /* スマホ画面幅に合わせた流動サイズ */
+        line-height: 1 !important;
     }
-    /* 今日や選択中の強調 */
-    .has-shift-btn { background-color: #FFF5F7 !important; border-bottom: 3px solid #FF4B4B !important; }
+    
+    /* 3. 選択中などの特殊スタイル [cite: 2026-01-28] */
+    .st-emotion-cache-ke6u7 { width: 100% !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -132,13 +130,13 @@ now = datetime.date.today()
 cal = calendar.monthcalendar(now.year, now.month)
 week_days = ["月", "火", "水", "木", "金", "土", "日"]
 
-# 曜日
+# 曜日（超省スペース）
 w_cols = st.columns(7)
 for i, wd in enumerate(week_days):
-    color = "#007AFF" if i==5 else "#FF3B30" if i==6 else "#999"
-    w_cols[i].markdown(f"<div style='text-align:center; font-size:0.7em; color:{color};'>{wd}</div>", unsafe_allow_html=True)
+    color = "#007AFF" if i==5 else "#FF3B30" if i==6 else "#888"
+    w_cols[i].markdown(f"<div style='text-align:center; font-size:2.5vw; color:{color};'>{wd}</div>", unsafe_allow_html=True)
 
-# 日付
+# 日付グリッド
 for week in cal:
     d_cols = st.columns(7)
     for i, day in enumerate(week):
@@ -146,28 +144,27 @@ for week in cal:
             cell_date = datetime.date(now.year, now.month, day)
             date_iso = cell_date.isoformat()
             
-            # 出勤日の場合は名前に「●」をつける
+            # ラベル（出勤は「点」ではなく「*」など短い記号に）
             label = f"{day}"
-            if date_iso in shift_map: label += "\n●"
+            if date_iso in shift_map: label += " *" 
             
-            # 日曜・土曜の色
-            if i == 6: label = f"🔴{day}"
-            elif i == 5: label = f"🔵{day}"
-
+            # 日曜・土曜の装飾
+            if i == 6: label = f"r{day}" # 赤っぽく見える工夫
+            
             if d_cols[i].button(label, key=f"d_{date_iso}", use_container_width=True):
                 st.session_state["selected_date"] = cell_date
                 st.rerun()
 
 # --- 7. 🕒 詳細表示 ---
 selected_date = st.session_state["selected_date"]
-st.markdown(f"### {selected_date.month}/{selected_date.day} の予定")
+st.markdown(f"#### {selected_date.month}/{selected_date.day} の予定")
 
 with st.container(border=True):
     date_key = selected_date.isoformat()
     if date_key in shift_map:
-        st.info(f"🕒 **シフト予定：{shift_map[date_key]}**")
+        st.info(f"🕒 シフト：{shift_map[date_key]}")
     else:
-        st.write("予定はありません。")
+        st.write("予定なし")
 
 with st.sidebar:
     st.write(f"👤 {user['hp_display_name']} さん")
