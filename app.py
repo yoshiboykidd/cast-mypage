@@ -78,7 +78,7 @@ with st.sidebar:
     # 管理者用隠しメニュー（合言葉で展開）
     with st.expander("⚙️ 管理設定"):
         admin_key = st.text_input("Admin Key", type="password")
-        if admin_key == "karinto2026": # あなたが決めた合言葉
+        if admin_key == "karin10": # あなたが決めた合言葉
             if st.button("名簿を最新に更新 🔄"):
                 with st.spinner("同期中..."):
                     count = sync_cast_master()
