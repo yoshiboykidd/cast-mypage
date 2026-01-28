@@ -2,46 +2,43 @@ import streamlit as st
 from st_supabase_connection import SupabaseConnection
 import datetime
 
-# --- 1. ページ構成（スマホ最適化） ---
-st.set_page_config(page_title="かりんとポータル", layout="centered")
+# --- 1. ページ基本設定 ---
+st.set_page_config(page_title="かりんとポータル", page_icon="💖", layout="centered")
 
-# --- 2. 接続設定 ---
+# --- 2. データベース接続 ---
 conn = st.connection("supabase", type=SupabaseConnection)
 
-# --- 3. 認証機能（ロジックのみ） ---
-def check_password():
-    def password_entered():
-        input_id = str(st.session_state["login_id"]).zfill(8)
-        user = conn.table("cast_members").select("*").eq("login_id", input_id).eq("password", st.session_state["password_input"]).execute()
-        if user.data:
-            st.session_state["password_correct"] = True
-            st.session_state["user_info"] = user.data[0]
-            del st.session_state["password_input"]
-        else:
-            st.session_state["password_correct"] = False
+# --- 3. 管理用：データ同期関数（枠組みのみ） ---
+def sync_all_data():
+    return 0, 0 # UI確認用のため処理はスキップ
 
+# --- 4. 🔐 ログイン認証（UI確認用：常にTrueにするか、既存ロジックを維持） ---
+def check_password():
+    # テストをスムーズにするため、一度ログインしたらセッションを維持
     if "password_correct" not in st.session_state:
-        st.header("🔐 ログイン")
-        st.text_input("ログインID (8桁)", key="login_id")
+        st.title("🔐 ログイン")
+        st.caption("テスト用：ID/PWは何でもログイン可能です（UI確認用）")
+        st.text_input("ログインID", key="login_id")
         st.text_input("パスワード", type="password", key="password_input")
-        st.button("ログイン", on_click=password_entered)
-        return False
-    elif not st.session_state["password_correct"]:
-        st.error("IDまたはパスワードが違います")
-        st.text_input("ログインID (8桁)", key="login_id")
-        st.text_input("パスワード", type="password", key="password_input")
-        st.button("ログイン", on_click=password_entered)
+        if st.button("ログイン"):
+            st.session_state["password_correct"] = True
+            # ダミーのユーザー情報
+            st.session_state["user_info"] = {
+                "display_name": "テスト キャスト",
+                "home_shop_id": "001",
+                "login_id": "00100001"
+            }
+            st.rerun()
         return False
     return True
 
-# --- 4. サイドバー構成（管理・共通機能） ---
+# --- 5. サイドバー ---
 with st.sidebar:
-    st.title("Menu")
+    st.header("メニュー")
     with st.expander("⚙️ 管理設定"):
-        admin_key = st.text_input("Admin Key", type="password")
-        if admin_key == "karin10":
-            st.button("店舗・名簿を同期 🔄")
-            st.button("HPからシフト取得 🌐")
+        st.text_input("Admin Key", type="password")
+        st.button("全データを同期 🔄")
+        st.button("HPからシフト取得 🌐")
     
     if st.session_state.get("password_correct"):
         st.divider()
@@ -50,61 +47,74 @@ with st.sidebar:
             st.session_state.clear()
             st.rerun()
 
-# --- 5. メイン画面（機能タブ） ---
+# --- 6. メインコンテンツ ---
 if check_password():
     user = st.session_state["user_info"]
     
-    # 店舗マスターの取得（プルダウン用）
-    shops = conn.table("shop_master").select("*").execute()
-    shop_options = {item['shop_id']: item['shop_name'] for item in shops.data}
-    shop_ids = sorted(list(shop_options.keys()))
+    # 店舗マスターのダミー（DBがない場合用）
+    shop_options = {"001": "池袋西口店", "002": "赤坂店", "003": "五反田店"}
+    shop_ids = list(shop_options.keys())
 
-    # 【重要】スマホでの操作性を決める3つのタブ
+    # スマホで見やすい3タブ構造
     tab_earn, tab_shift, tab_req = st.tabs(["実績報告", "シフト確認", "シフト申請"])
 
-    # --- A. 実績報告タブ ---
+    # --- タブA: 実績報告 ---
     with tab_earn:
-        st.subheader("実績報告")
-        with st.form("earn_form", clear_on_submit=True):
-            # デフォルトで自分の本拠地を選択
-            def_idx = shop_ids.index(user['home_shop_id']) if user['home_shop_id'] in shop_ids else 0
-            st.selectbox("勤務店舗", options=shop_ids, format_func=lambda x: f"{x}: {shop_options[x]}", index=def_idx)
-            st.number_input("本日の給与", min_value=0, step=1000)
-            st.date_input("稼働日")
-            st.text_area("備考")
-            st.form_submit_button("報告を保存")
+        st.subheader("📝 本日の実績報告")
+        with st.form("earn_form"):
+            st.selectbox("勤務店舗", options=shop_ids, format_func=lambda x: f"{x}: {shop_options[x]}")
+            st.number_input("本日の給与 (円)", min_value=0, step=1000, value=15000)
+            st.date_input("稼働日", value=datetime.date.today())
+            st.text_area("メモ (任意)")
+            st.form_submit_button("報告を保存する ✨")
 
         st.divider()
-        st.subheader("直近の履歴")
-        # 履歴をシンプルな表で表示
-        history = conn.table("daily_earnings").select("date, amount").eq("cast_id", user['login_id']).order("date", desc=True).limit(5).execute()
-        if history.data:
-            st.dataframe(history.data, use_container_width=True)
+        st.subheader("📊 直近の履歴")
+        # 履歴の見た目確認用サンプル
+        sample_history = [
+            {"date": "2026-01-27", "amount": 18000, "shop": "池袋西口店"},
+            {"date": "2026-01-26", "amount": 12000, "shop": "赤坂店"},
+        ]
+        st.table(sample_history)
 
-    # --- B. シフト確認タブ ---
+    # --- タブB: シフト確認（ダミーデータ表示） ---
     with tab_shift:
-        st.subheader("確定シフト")
-        # リスト形式のカレンダー：スマホで最も見やすい形式
-        shifts = conn.table("shifts").select("*, shop_master(shop_name)")\
-            .eq("cast_id", user['login_id'])\
-            .gte("date", datetime.date.today().isoformat())\
-            .order("date").execute()
+        st.subheader("📅 確定シフト")
+        st.caption("※以下は表示イメージです（実際のデータではありません）")
         
-        if shifts.data:
-            for s in shifts.data:
-                # 1つ1つの予定を独立したブロックで表示
-                with st.container(border=True):
-                    c1, c2 = st.columns([1, 2])
-                    c1.write(s['date'])
-                    c2.write(f"**{s['shop_master']['shop_name']}**")
-        else:
-            st.info("確定したシフトはありません")
+        # スマホで最も見やすい「カード型リスト」のフレームワーク
+        dummy_shifts = [
+            {"date": "2026-01-28", "shop": "池袋西口店", "time": "19:00 - LAST", "status": "確定"},
+            {"date": "2026-01-29", "shop": "赤坂店", "time": "20:00 - 05:00", "status": "確定"},
+            {"date": "2026-01-31", "shop": "五反田店", "time": "18:00 - LAST", "status": "確認中"},
+        ]
 
-    # --- C. シフト申請タブ ---
+        for s in dummy_shifts:
+            # 枠（Container）を使って1日分をひとまとめにする
+            with st.container(border=True):
+                col1, col2 = st.columns([1, 2])
+                
+                # 左側：日付を強調
+                d = datetime.datetime.strptime(s['date'], "%Y-%m-%d")
+                col1.markdown(f"### {d.day}")
+                col1.caption(f"{d.month}月")
+                
+                # 右側：詳細情報
+                col2.markdown(f"**🏢 {s['shop']}**")
+                col2.write(f"⏰ {s['time']}")
+                
+                # ステータスによって色を変えるなどの視認性向上
+                if s['status'] == "確定":
+                    col2.success(s['status'])
+                else:
+                    col2.warning(s['status'])
+
+    # --- タブC: シフト申請 ---
     with tab_req:
-        st.subheader("シフト申請")
-        with st.form("req_form", clear_on_submit=True):
+        st.subheader("📝 シフト希望の提出")
+        with st.form("req_form"):
             st.date_input("出勤希望日")
-            st.selectbox("希望店舗", options=shop_ids, format_func=lambda x: f"{x}: {shop_options[x]}", key="req_shop")
-            st.text_area("メッセージ")
-            st.form_submit_button("申請を送信")
+            st.selectbox("希望店舗", options=shop_ids, format_func=lambda x: f"{x}: {shop_options[x]}")
+            st.multiselect("希望時間", ["18:00〜", "19:00〜", "20:00〜", "LASTまで", "終電まで"])
+            st.text_area("備考・メッセージ")
+            st.form_submit_button("申請を送信 📤")
